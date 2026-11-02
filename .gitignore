@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# The previous app and its design system. Kept on disk, deliberately out of
+# version control and out of the build — nothing in src/ imports from here.
+archive/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local secrets — the shadcn.io MCP token lives here
+.env.shadcnio
+.env*.local
+
+# Android / Capacitor build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+
+# Local environment (never commit provider keys)
+.env
+.env.local
+
+# Build artefacts: the APK is rebuilt by `npm run apk`, and a 5 MB binary in
+# version control is a binary that goes stale in a clone.
+artifacts/
+
+# Editor / agent scratch state
+.freebuff/
+
+.vercel
+
+# A Supabase personal access token, pasted in by the owner so the CLI can deploy
+# edge functions from a machine with no interactive terminal. Never committed.
+.supabase-access-token
+
+# Machine-local: the editor's imported conversation snapshots and the Supabase
+# CLI's own state. Neither is project source, and the snapshots are large.
+.cloud-attachments/
+supabase/.temp/
+
+# Agent/editor scratch that is not part of the build
+src/screens/*.bak
+scripts/.tmp-*
+tmp-design-refs.png
+screens.html
+screenshots/gallery.html
