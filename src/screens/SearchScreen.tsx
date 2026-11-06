@@ -40,9 +40,11 @@ const SUGGESTION_COUNT = 4;
  * Product search composes several reads per query, so asking on every keystroke
  * would be a burst of requests per word — and on a cheap phone on a slow
  * connection those requests are what makes the box feel broken. The rows already
- * on screen stay while the next answer is in flight.
+ * on screen stay while the next answer is in flight, and a new keystroke aborts
+ * the request the previous one started (see `useResource`), so only the latest
+ * question ever reaches an answer.
  */
-const SETTLE_MS = 300;
+const SETTLE_MS = 500;
 
 /**
  * A value that only updates once it has held still.
