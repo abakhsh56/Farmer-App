@@ -369,20 +369,22 @@ export function HomeScreen({
             <button
               type="button"
               /*
-                Warming on the way in, not on the press: a finger rests on this
-                pill and a keyboard lands on it before either presses it, and the
-                model is 63 MB, so the load starts there — and the first sentence
-                is made there too, which is what makes the press start at the
+                Warming happens on the press, not on the way in: the model is
+                63 MB, and a finger resting on this pill — or a keyboard
+                landing on it — used to start that download before anything
+                was asked for. Warming on the press still makes the first
+                sentence there, which is what makes the press start at the
                 first sound. Nothing is said until the press. The device's own
                 Urdu voice skips this entirely: there is nothing to fetch.
               */
-              onPointerEnter={() => speech.warm(speechTag, spokenAdvice)}
-              onFocus={() => speech.warm(speechTag, spokenAdvice)}
-              onClick={() =>
-                listening
-                  ? speech.stop()
-                  : speech.speak({ id: 'weather', text: spokenAdvice, lang: speechTag })
-              }
+              onClick={() => {
+                if (listening) {
+                  speech.stop();
+                  return;
+                }
+                speech.warm(speechTag, spokenAdvice);
+                speech.speak({ id: 'weather', text: spokenAdvice, lang: speechTag });
+              }}
               aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
               className="flex items-center gap-1.5 rounded-full bg-white/12 px-3 py-1.5 text-label text-white"
             >

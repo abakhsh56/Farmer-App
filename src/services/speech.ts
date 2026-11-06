@@ -212,7 +212,7 @@ function freeVoiceUrls(): void {
  *
  * The first call of a page load also pays for 63 MB of model and 18 MB of
  * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
- * offers a warm-up for a finger that is already on the pill.
+ * offers a warm-up on the press.
  */
 export async function speakWithAppVoice(text: string, onEnd?: () => void): Promise<boolean> {
   if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
@@ -293,11 +293,11 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
 }
 
 /**
- * Starts getting the app's Urdu voice ready without pressing anything: the model
+ * Starts getting the app's Urdu voice ready on the press: the model
  * arrives, and the sentence the farmer is about to hear is made in advance.
  *
  * `text` is the advice the pill would read, which is known before it is pressed.
- * Wired to the `Listen` pill's hover and focus — see `SpeechProvider.warm`.
+ * Called from the `Listen` pill's press — see `SpeechProvider.warm`.
  */
 export function warmAppVoice(text: string): void {
   void import('./piper')
