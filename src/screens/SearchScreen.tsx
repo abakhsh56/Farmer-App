@@ -2,6 +2,7 @@ import { ChevronLeft, MessageCircle, Search, TriangleAlert, X } from 'lucide-rea
 import { useEffect, useState, type ReactNode } from 'react';
 import { SectionLabel } from '@/components/SectionLabel';
 import { EmptyState, LoadingState } from '@/components/States';
+import { Button } from '@/components/ui/button';
 import { dealerNameKey } from '@/data/dealers';
 import { useLocale } from '@/i18n/LocaleProvider';
 import { formatMoney, formatNumber, formatRelativeTime } from '@/i18n/format';
@@ -33,6 +34,14 @@ import type { DealerSummary, DealerProduct, ProductHit } from '@/services/types'
 
 /** How many suggestions each type offers before the farmer types anything. */
 const SUGGESTION_COUNT = 4;
+
+/**
+ * How many rows render before the farmer asks for more. A search can match
+ * every shop in the radius or a whole catalogue; rendering all of it at once is
+ * a long list the farmer waits for and scrolls through. Twenty is enough to
+ * choose from, and the rest is one tap away.
+ */
+const LIST_CAP = 20;
 
 /**
  * How long typing must pause before the service is asked.
@@ -87,6 +96,12 @@ export function SearchScreen({
    * keyword — not a copy of the string per tab, but a single source for both.
    */
   const keyword = submitted ?? settled;
+
+  /** How many shops this list shows; a new question starts at twenty again. */
+  const [visibleDealers, setVisibleDealers] = useState(LIST_CAP);
+  useEffect(() => {
+    setVisibleDealers(LIST_CAP);
+  }, [keyword]);
 
   /*
    * The same origin rule as the dealer list: a temporary area is passed
@@ -274,7 +289,7 @@ export function SearchScreen({
                 />
               ) : null}
               <ul className="mt-3 space-y-2" aria-label={t('search.tabDealers')}>
-                {dealerRows.map((entry) => (
+                {dealerRows.slice(0, visibleDealers).map((entry) => (
                   <li
                     key={entry.id}
                     className="flex items-center justify-between gap-3 rounded-md border border-border bg-card p-3"
@@ -303,9 +318,19 @@ export function SearchScreen({
                   </li>
                 ))}
               </ul>
+              {dealerRows.length > visibleDealers ? (
+                <Button
+                  variant="outline"
+                  className="mt-3 h-11 w-full rounded-full"
+                  onClick={() => setVisibleDealers((count) => count + LIST_CAP)}
+                >
+                  {t('common.showMore')}
+                </Button>
+              ) : null}
             </>
           ) : (
             <ProductResults
+              key={keyword}
               hits={productRows}
               loading={products.status === 'loading'}
               empty={t('search.noProducts', { query: submitted })}
@@ -391,6 +416,9 @@ function ProductResults({
 }) {
   const { t, locale } = useLocale();
 
+  /** How many products render; a new question remounts this list, so it starts at twenty again. */
+  const [visibleProducts, setVisibleProducts] = useState(LIST_CAP);
+
   const stockLine = (product: DealerProduct) =>
     product.inStock === true && product.availableQty !== null
       ? t('dealer.products.inStock', { qty: product.availableQty })
@@ -406,7 +434,7 @@ function ProductResults({
       ) : null}
 
       <ul className="mt-3 space-y-2" aria-label={t('search.tabProducts')}>
-        {hits.map((hit) => (
+        {hits.slice(0, visibleProducts).map((hit) => (
           <li
             key={`${hit.dealerId}-${hit.product.id}`}
             className="flex items-start justify-between gap-3 rounded-md border border-border bg-card p-3"
@@ -454,6 +482,15 @@ function ProductResults({
           </li>
         ))}
       </ul>
+      {hits.length > visibleProducts ? (
+        <Button
+          variant="outline"
+          className="mt-3 h-11 w-full rounded-full"
+          onClick={() => setVisibleProducts((count) => count + LIST_CAP)}
+        >
+          {t('common.showMore')}
+        </Button>
+      ) : null}
 
       {/*
         Provenance, always. Product search reads the nearest shops rather than the

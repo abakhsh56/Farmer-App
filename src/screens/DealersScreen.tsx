@@ -8,7 +8,7 @@ import {
   Sprout,
   TriangleAlert,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { SectionLabel } from '@/components/SectionLabel';
 import { EmptyState, ErrorState, LoadingState } from '@/components/States';
@@ -57,6 +57,14 @@ import { useVisits } from '@/visits/VisitProvider';
 
 type FilterId = 'all' | 'open' | DealerTag;
 
+/**
+ * How many rows render before the farmer asks for more. A shop's whole
+ * catalogue, or every shop in a 100 km radius, rendered at once is a long list
+ * of rows the farmer has to wait for and scroll through; twenty is enough to
+ * choose from, and the rest is one tap away.
+ */
+const LIST_CAP = 20;
+
 const FILTERS: ReadonlyArray<{ id: FilterId; labelKey: MessageKey }> = [
   { id: 'all', labelKey: 'dealers.filter.all' },
   { id: 'open', labelKey: 'dealers.filter.openNow' },
@@ -79,6 +87,11 @@ export function DealersScreen({
 }) {
   const { t, locale } = useLocale();
   const [filter, setFilter] = useState<FilterId>('all');
+  /** How many shops this list shows; a new filter is a new question, so it starts at twenty again. */
+  const [visibleDealers, setVisibleDealers] = useState(LIST_CAP);
+  useEffect(() => {
+    setVisibleDealers(LIST_CAP);
+  }, [filter]);
   /** null means the profile location; anything else is a search that stays temporary. */
   const [areaId, setAreaId] = useState<AreaId | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
@@ -347,7 +360,7 @@ export function DealersScreen({
           ) : null}
 
           <ul className="mt-2 space-y-2.5">
-            {rows.map((entry) => {
+            {rows.slice(0, visibleDealers).map((entry) => {
               const name = dealerName(entry);
               const verified = entry.verifiedAt !== null;
               const hour = closingHour(entry.id);
@@ -439,6 +452,15 @@ export function DealersScreen({
               );
             })}
           </ul>
+          {rows.length > visibleDealers ? (
+            <Button
+              variant="outline"
+              className="mt-3 h-11 w-full rounded-full"
+              onClick={() => setVisibleDealers((count) => count + LIST_CAP)}
+            >
+              {t('common.showMore')}
+            </Button>
+          ) : null}
         </>
       ) : null}
 
@@ -617,6 +639,11 @@ function DealerProfile({
 }) {
   const { t, locale } = useLocale();
   const visits = useVisits();
+  /** How many products of this shop render; opening another shop starts at twenty again. */
+  const [visibleProducts, setVisibleProducts] = useState(LIST_CAP);
+  useEffect(() => {
+    setVisibleProducts(LIST_CAP);
+  }, [dealer.id]);
   const { requestIdentity } = useSession();
   const products = useDealerProducts(dealer.id);
 
@@ -726,7 +753,7 @@ function DealerProfile({
           <p className="mt-2 text-body-sm text-muted-foreground">{t('dealer.products.none')}</p>
         ) : null}
         <ul className="mt-2 space-y-2">
-          {products.data.map((product: DealerProduct) => (
+          {products.data.slice(0, visibleProducts).map((product: DealerProduct) => (
             <li
               key={product.id}
               className="flex items-start justify-between gap-3 rounded-md border border-border bg-card p-3"
@@ -759,6 +786,15 @@ function DealerProfile({
             </li>
           ))}
         </ul>
+        {products.data.length > visibleProducts ? (
+          <Button
+            variant="outline"
+            className="mt-3 h-11 w-full rounded-full"
+            onClick={() => setVisibleProducts((count) => count + LIST_CAP)}
+          >
+            {t('common.showMore')}
+          </Button>
+        ) : null}
         {products.sourced ? (
           <p className="mt-2 flex items-center gap-1.5 text-caption text-muted-foreground">
             {products.sourced.status === 'failing' ? (

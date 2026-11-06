@@ -36,6 +36,7 @@ export const en = {
   'nav.community': 'Community',
 
   'common.seeAll': 'See all',
+  'common.showMore': 'Show more',
   'common.steady': '— steady',
   'common.km': '{km} km',
   'common.next': 'Next',
@@ -1023,6 +1024,7 @@ export const ur: Record<MessageKey, string> = {
   'nav.community': 'برادری',
 
   'common.seeAll': 'سب دیکھیں',
+  'common.showMore': 'مزید دکھائیں',
   'common.steady': '— مستحکم',
   'common.km': '{km} کلومیٹر',
   'common.next': 'آگے',
