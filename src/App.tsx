@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from 'react';
+import { Suspense, lazy, useState, type ComponentType } from 'react';
 import { AppTabBar, type TabKey } from '@/components/AppTabBar';
 import { LoadingState } from '@/components/States';
 import { Toaster } from '@/components/ui/sonner';
@@ -13,40 +13,56 @@ import {
   isOnboardingComplete,
   OnboardingFlow,
 } from '@/onboarding/OnboardingFlow';
+import { HomeScreen } from '@/screens/HomeScreen';
 import { ServicesProvider, type Services } from '@/services/registry';
 import { SessionProvider } from '@/session/SessionProvider';
 import { SpeechProvider } from '@/speech/SpeechProvider';
 import { ThemeProvider } from '@/theme/ThemeProvider';
 import { VisitProvider } from '@/visits/VisitProvider';
 /*
- * Screens load on demand, one chunk each: the first paint only needs the home
- * tab, and a farmer who never opens Scan should never download the scan path.
- * Each screen is a named export, so the lazy import maps it to a default.
+ * Home is the first paint — the farmer lands there, and its header is read the
+ * moment the app renders — so it ships with the entry chunk. The other screens
+ * load on demand, one chunk each: a farmer who never opens Scan should never
+ * download the scan path. Each screen is a named export, so the lazy import
+ * maps it to a default.
+ *
+ * The suites were written when the screens rendered synchronously, and they ask
+ * for what is on screen the moment it renders. The import is therefore started
+ * when this module loads under test — the module graph is already in memory, so
+ * the chunk is resolved by the time a suite renders and the screens keep
+ * appearing. In the app nothing changes: the chunk is fetched only when its tab
+ * is opened.
  */
-const ChatScreen = lazy(() =>
+function lazyScreen<T extends ComponentType<any>>(
+  load: () => Promise<{ default: T }>,
+) {
+  if (import.meta.env.MODE === 'test') {
+    void load();
+  }
+  return lazy(load);
+}
+
+const ChatScreen = lazyScreen(() =>
   import('@/screens/ChatScreen').then((m) => ({ default: m.ChatScreen })),
 );
-const CommunityScreen = lazy(() =>
+const CommunityScreen = lazyScreen(() =>
   import('@/screens/CommunityScreen').then((m) => ({ default: m.CommunityScreen })),
 );
-const DealersScreen = lazy(() =>
+const DealersScreen = lazyScreen(() =>
   import('@/screens/DealersScreen').then((m) => ({ default: m.DealersScreen })),
 );
-const HomeScreen = lazy(() =>
-  import('@/screens/HomeScreen').then((m) => ({ default: m.HomeScreen })),
-);
-const LocationSearchScreen = lazy(() =>
+const LocationSearchScreen = lazyScreen(() =>
   import('@/screens/LocationSearchScreen').then((m) => ({
     default: m.LocationSearchScreen,
   })),
 );
-const SearchScreen = lazy(() =>
+const SearchScreen = lazyScreen(() =>
   import('@/screens/SearchScreen').then((m) => ({ default: m.SearchScreen })),
 );
-const ProfileScreen = lazy(() =>
+const ProfileScreen = lazyScreen(() =>
   import('@/screens/ProfileScreen').then((m) => ({ default: m.ProfileScreen })),
 );
-const ScanScreen = lazy(() =>
+const ScanScreen = lazyScreen(() =>
   import('@/screens/ScanScreen').then((m) => ({ default: m.ScanScreen })),
 );
 
