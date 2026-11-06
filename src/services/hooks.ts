@@ -15,6 +15,12 @@
  *   out of date. `status` is therefore about whether there is anything to show,
  *   not about whether a request is in flight.
  *
+ * · An answer is trusted for a minute. Switching tabs unmounts a screen, and
+ *   coming back used to re-ask for everything a second after it was answered;
+ *   the cache keyed on the request string stops that. A superseded request is
+ *   aborted rather than left running: a search the farmer has already retyped
+ *   must not keep its round-trips going.
+ *
  * · The provider's own report travels with the data. `sourced` carries the source
  *   label, the observation time, the freshness and the provider's health, so a
  *   screen cannot render a figure without also being able to say where it came
@@ -59,10 +65,21 @@ export type Resource<T> = {
 
 const EMPTY: readonly never[] = [];
 
+/** How long a finished answer is trusted before the next mount re-asks. */
+const CACHE_TTL_MS = 60_000;
+
+/*
+ * Finished answers keyed by the request string, shared by every screen: a
+ * tab switch unmounts a screen, and coming back within the minute reuses the
+ * answer instead of re-asking. Only successes are kept — a failure is never
+ * cached — and a retry drops the entry first, so "ask again" really asks.
+ */
+const resourceCache = new Map<string, { at: number; value: Sourced<unknown> }>();
+
 function useResource<T>(
   key: string,
   empty: T,
-  load: (services: Services) => Promise<Sourced<T>>,
+  load: (services: Services, signal: AbortSignal) => Promise<Sourced<T>>,
   enabled = true,
 ): Resource<T> {
   const services = useServices();
@@ -83,18 +100,39 @@ function useResource<T>(
       setInFlight(false);
       return;
     }
+
+    /* A fresh answer from the last minute is the answer: no request, no wait. */
+    const cached = resourceCache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+      setSourced(cached.value as Sourced<T>);
+      setError(null);
+      setLoadedAt(cached.at);
+      setInFlight(false);
+      return;
+    }
+
     let cancelled = false;
+    /*
+     * Aborting is what stops the request, not just its answer: a superseded
+     * search used to keep all of its round-trips running while the farmer had
+     * already typed the next word. The signal is handed to the loader, which
+     * hands it to the provider; a provider that cannot abort ignores it.
+     */
+    const controller = new AbortController();
     setInFlight(true);
 
     void (async () => {
       try {
-        const result = await loadRef.current(services);
-        if (cancelled) return;
+        const result = await loadRef.current(services, controller.signal);
+        if (cancelled || controller.signal.aborted) return;
+        resourceCache.set(key, { at: Date.now(), value: result });
         setSourced(result);
         setError(null);
         setLoadedAt(Date.now());
       } catch (failure) {
-        if (cancelled) return;
+        if (cancelled || controller.signal.aborted) return;
+        /* An aborted request is not a failed screen: the question was withdrawn. */
+        if (failure instanceof Error && failure.name === 'AbortError') return;
         setError(failure instanceof Error ? failure.message : 'The service could not be reached.');
       } finally {
         if (!cancelled) setInFlight(false);
@@ -103,10 +141,16 @@ function useResource<T>(
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [key, attempt, enabled, services]);
 
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const retry = useCallback(() => {
+    /* A retry means "ask again": drop the cached answer first, or the retry
+       would hand back the same answer it already has. */
+    resourceCache.delete(key);
+    setAttempt((value) => value + 1);
+  }, [key]);
 
   const hasContent = sourced !== null;
   return {
@@ -137,7 +181,7 @@ export function useWeather(point: GeoPoint = PROFILE_POINT): Resource<WeatherNow
       windDir: null,
       conditionText: null,
     },
-    (services) => services.weather.current(point),
+    (services, signal) => services.weather.current(point, signal),
   );
 }
 
@@ -148,7 +192,7 @@ export function useForecast(
   return useResource<WeatherDay[]>(
     `forecast:${point.lat.toFixed(3)},${point.lon.toFixed(3)}:${days}`,
     EMPTY as unknown as WeatherDay[],
-    (services) => services.weather.forecast(point, days),
+    (services, signal) => services.weather.forecast(point, days, signal),
   );
 }
 
@@ -160,7 +204,7 @@ export function useMarketRates(commodity?: string): Resource<MarketRate[]> {
   return useResource<MarketRate[]>(
     `rates:${commodity ?? 'all'}`,
     EMPTY as unknown as MarketRate[],
-    (services) => services.market.rates(commodity),
+    (services, signal) => services.market.rates(commodity, signal),
   );
 }
 
@@ -188,13 +232,13 @@ export function useDealerSearch(query: DealerSearchQuery): Resource<DealerSummar
   return useResource<DealerSummary[]>(
     key,
     EMPTY as unknown as DealerSummary[],
-    (services) =>
+    (services, signal) =>
       services.dealer.search({
         radiusKm,
         query: text,
         tags,
         origin,
-      }),
+      }, signal),
   );
 }
 
@@ -217,7 +261,7 @@ export function useProductSearch(query: ProductSearchQuery): Resource<ProductHit
   return useResource<ProductHit[]>(
     key,
     EMPTY as unknown as ProductHit[],
-    (services) => services.dealer.searchProducts({ radiusKm, query: text, origin }),
+    (services, signal) => services.dealer.searchProducts({ radiusKm, query: text, origin }, signal),
   );
 }
 
@@ -225,7 +269,7 @@ export function useDealerProducts(dealerId: string | null): Resource<DealerProdu
   return useResource<DealerProduct[]>(
     `products:${dealerId ?? 'none'}`,
     EMPTY as unknown as DealerProduct[],
-    (services) => services.dealer.products(dealerId as string),
+    (services, signal) => services.dealer.products(dealerId as string, signal),
     dealerId !== null,
   );
 }
@@ -253,6 +297,6 @@ export function useStockists(
   return useResource<DealerStockist[]>(
     key,
     EMPTY as unknown as DealerStockist[],
-    (services) => services.dealer.stockists({ canonicalProductId, radiusKm, origin }),
+    (services, signal) => services.dealer.stockists({ canonicalProductId, radiusKm, origin }, signal),
   );
 }

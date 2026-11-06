@@ -79,8 +79,8 @@ export type WeatherDay = {
 export interface WeatherProvider {
   readonly name: string;
   /** Current conditions. Never throws: a failure is reported inside the result. */
-  current(point: GeoPoint): Promise<Sourced<WeatherNow>>;
-  forecast(point: GeoPoint, days: number): Promise<Sourced<WeatherDay[]>>;
+  current(point: GeoPoint, signal?: AbortSignal): Promise<Sourced<WeatherNow>>;
+  forecast(point: GeoPoint, days: number, signal?: AbortSignal): Promise<Sourced<WeatherDay[]>>;
 }
 
 /**
@@ -141,7 +141,7 @@ export type MarketRate = {
 
 export interface MarketProvider {
   readonly name: string;
-  rates(commodity?: string): Promise<Sourced<MarketRate[]>>;
+  rates(commodity?: string, signal?: AbortSignal): Promise<Sourced<MarketRate[]>>;
 }
 
 /** A rate is only quotable while it is inside the freshness window. */
@@ -434,10 +434,15 @@ export interface DealerProvider {
   readonly name: string;
   /** Hard ceiling, applied by the provider as well as by the UI. */
   readonly maxRadiusKm: 100;
-  search(query: DealerSearchQuery): Promise<Sourced<DealerSummary[]>>;
-  products(dealerId: string): Promise<Sourced<DealerProduct[]>>;
+  /*
+   * `signal` is how a screen stops a read it no longer needs: a superseded
+   * search aborts its requests instead of paying for answers it will throw
+   * away. Providers that cannot abort — the local ones — simply ignore it.
+   */
+  search(query: DealerSearchQuery, signal?: AbortSignal): Promise<Sourced<DealerSummary[]>>;
+  products(dealerId: string, signal?: AbortSignal): Promise<Sourced<DealerProduct[]>>;
   /** Where one canonical product can be bought right now, nearest first. */
-  stockists(query: StockistQuery): Promise<Sourced<DealerStockist[]>>;
+  stockists(query: StockistQuery, signal?: AbortSignal): Promise<Sourced<DealerStockist[]>>;
   /**
    * Products by name, across the shops in range, nearest shop first.
    *
@@ -446,7 +451,7 @@ export interface DealerProvider {
    * the farmer typed. A search box cannot name a slug in advance, which is why
    * this is a capability of its own rather than a flag on the other.
    */
-  searchProducts(query: ProductSearchQuery): Promise<Sourced<ProductHit[]>>;
+  searchProducts(query: ProductSearchQuery, signal?: AbortSignal): Promise<Sourced<ProductHit[]>>;
 }
 
 /* -------------------------------------------------------------------------- */

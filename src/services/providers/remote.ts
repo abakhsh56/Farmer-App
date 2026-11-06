@@ -153,11 +153,13 @@ type WeatherRow = {
 export class SupabaseWeatherProvider implements WeatherProvider {
   readonly name = 'Supabase normalised weather';
 
-  async current(point: GeoPoint): Promise<Sourced<WeatherNow>> {
+  async current(point: GeoPoint, signal?: AbortSignal): Promise<Sourced<WeatherNow>> {
     const client = await supabase();
     if (!client) return failing(emptyNow(), this.name, 'Backend is not configured.');
 
-    const { data, error } = await client.rpc('latest_weather', { p_lat: point.lat, p_lon: point.lon });
+    const weatherQuery = client.rpc('latest_weather', { p_lat: point.lat, p_lon: point.lon });
+    if (signal) weatherQuery.abortSignal(signal);
+    const { data, error } = await weatherQuery;
     if (error) return failing(emptyNow(), this.name, error.message);
 
     const rows = data as WeatherRow[] | null;
@@ -244,14 +246,16 @@ const COMMODITY_KEYS: Record<string, MessageKey> = {
 export class SupabaseMarketProvider implements MarketProvider {
   readonly name = 'Supabase normalised market';
 
-  async rates(commodity?: string): Promise<Sourced<MarketRate[]>> {
+  async rates(commodity?: string, signal?: AbortSignal): Promise<Sourced<MarketRate[]>> {
     const client = await supabase();
     if (!client) return failing<MarketRate[]>([], this.name, 'Backend is not configured.');
 
-    const { data, error } = await client.rpc('market_rates', {
+    const ratesQuery = client.rpc('market_rates', {
       p_commodity: commodity ?? null,
       p_max_age_hours: 36,
     });
+    if (signal) ratesQuery.abortSignal(signal);
+    const { data, error } = await ratesQuery;
     if (error) return failing<MarketRate[]>([], this.name, error.message);
 
     const rows = (data as MarketRow[] | null) ?? [];
@@ -375,16 +379,18 @@ export class SupabaseDealerProvider implements DealerProvider {
   readonly name = 'Supabase dealer projection';
   readonly maxRadiusKm = 100 as const;
 
-  async search(query: DealerSearchQuery): Promise<Sourced<DealerSummary[]>> {
+  async search(query: DealerSearchQuery, signal?: AbortSignal): Promise<Sourced<DealerSummary[]>> {
     const client = await supabase();
     if (!client) return failing<DealerSummary[]>([], this.name, 'Backend is not configured.');
 
-    const { data, error } = await client.rpc('dealers_within_radius', {
+    const dealersQuery = client.rpc('dealers_within_radius', {
       p_farmer_id: null,
       p_lat: query.origin?.lat ?? null,
       p_lon: query.origin?.lon ?? null,
       p_radius_km: Math.min(query.radiusKm, this.maxRadiusKm),
     });
+    if (signal) dealersQuery.abortSignal(signal);
+    const { data, error } = await dealersQuery;
     if (error) return failing<DealerSummary[]>([], this.name, error.message);
 
     const rows = (data as DealerRow[] | null) ?? [];
@@ -419,11 +425,13 @@ export class SupabaseDealerProvider implements DealerProvider {
     };
   }
 
-  async products(dealerId: string): Promise<Sourced<DealerProduct[]>> {
+  async products(dealerId: string, signal?: AbortSignal): Promise<Sourced<DealerProduct[]>> {
     const client = await supabase();
     if (!client) return failing<DealerProduct[]>([], this.name, 'Backend is not configured.');
 
-    const { data, error } = await client.rpc('dealer_products_for', { p_dealer_id: dealerId });
+    const productsQuery = client.rpc('dealer_products_for', { p_dealer_id: dealerId });
+    if (signal) productsQuery.abortSignal(signal);
+    const { data, error } = await productsQuery;
     if (error) return failing<DealerProduct[]>([], this.name, error.message);
 
     const rows = (data as DealerProductRow[] | null) ?? [];
@@ -455,16 +463,18 @@ export class SupabaseDealerProvider implements DealerProvider {
    * part of the area and presenting it as all of it is the failure this whole
    * layer exists to prevent.
    */
-  async searchProducts(query: ProductSearchQuery): Promise<Sourced<ProductHit[]>> {
+  async searchProducts(query: ProductSearchQuery, signal?: AbortSignal): Promise<Sourced<ProductHit[]>> {
     const client = await supabase();
     if (!client) return failing<ProductHit[]>([], this.name, 'Backend is not configured.');
 
-    const { data, error } = await client.rpc('dealers_within_radius', {
+    const shopsQuery = client.rpc('dealers_within_radius', {
       p_farmer_id: null,
       p_lat: query.origin?.lat ?? null,
       p_lon: query.origin?.lon ?? null,
       p_radius_km: Math.min(query.radiusKm, this.maxRadiusKm),
     });
+    if (signal) shopsQuery.abortSignal(signal);
+    const { data, error } = await shopsQuery;
     if (error) return failing<ProductHit[]>([], this.name, error.message);
 
     const shops = ((data as DealerRow[] | null) ?? [])
@@ -476,9 +486,11 @@ export class SupabaseDealerProvider implements DealerProvider {
 
     const listings = await Promise.all(
       shops.map(async (shop) => {
-        const { data: productData, error: productError } = await client.rpc('dealer_products_for', {
+        const productQuery = client.rpc('dealer_products_for', {
           p_dealer_id: shop.id,
         });
+        if (signal) productQuery.abortSignal(signal);
+        const { data: productData, error: productError } = await productQuery;
         /* One shop's projection failing does not fail the search: the other shops
            answered, and their listings are still true. It does mean this shop's
            stock is unknown, which is why the row it would have contributed is
@@ -522,16 +534,18 @@ export class SupabaseDealerProvider implements DealerProvider {
    * it; the function falls back to the signed-in farmer's saved location, and a
    * guest with no area on file gets the empty list rather than a wrong one.
    */
-  async stockists(query: StockistQuery): Promise<Sourced<DealerStockist[]>> {
+  async stockists(query: StockistQuery, signal?: AbortSignal): Promise<Sourced<DealerStockist[]>> {
     const client = await supabase();
     if (!client) return failing<DealerStockist[]>([], this.name, 'Backend is not configured.');
 
-    const { data, error } = await client.rpc('dealer_stockists_for', {
+    const stockistsQuery = client.rpc('dealer_stockists_for', {
       p_slug: query.canonicalProductId,
       p_lat: query.origin?.lat ?? null,
       p_lon: query.origin?.lon ?? null,
       p_radius_km: Math.min(query.radiusKm, this.maxRadiusKm),
     });
+    if (signal) stockistsQuery.abortSignal(signal);
+    const { data, error } = await stockistsQuery;
     if (error) return failing<DealerStockist[]>([], this.name, error.message);
 
     const rows = (data as StockistRow[] | null) ?? [];

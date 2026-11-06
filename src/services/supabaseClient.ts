@@ -38,12 +38,25 @@ export type SupabaseSignUpInput = {
   };
 };
 
+/**
+ * What `rpc` really returns: the PostgREST builder is both awaitable and
+ * abortable, and the old type only described the awaitable half. A screen that
+ * moves on aborts its superseded request through this, so the request stops
+ * instead of merely being ignored when its answer arrives.
+ */
+export type RpcResult = Promise<{
+  data: unknown;
+  error: { message: string; code?: string } | null;
+}> & {
+  abortSignal: (signal: AbortSignal) => RpcResult;
+};
+
 export type SupabaseLike = {
   from: (table: string) => unknown;
   rpc: (
     fn: string,
     args?: Record<string, unknown>,
-  ) => Promise<{ data: unknown; error: { message: string; code?: string } | null }>;
+  ) => RpcResult;
   auth: {
     getSession: () => Promise<{ data: { session: SupabaseSession | null } }>;
     /** Supabase sends its own SMS when phone auth is configured; we never hold the code. */
