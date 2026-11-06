@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { AppTabBar, type TabKey } from '@/components/AppTabBar';
+import { LoadingState } from '@/components/States';
 import { Toaster } from '@/components/ui/sonner';
 import { ChatProvider, useChat } from '@/chat/ChatProvider';
 import { CommunityProvider } from '@/community/CommunityProvider';
 import { CreditProvider } from '@/credit/CreditProvider';
+import { useLocale } from '@/i18n/LocaleProvider';
 import { LocaleProvider } from '@/i18n/LocaleProvider';
 import { InsightProvider } from '@/insights/InsightProvider';
 import { LocationProvider } from '@/location/LocationProvider';
@@ -16,14 +18,37 @@ import { SessionProvider } from '@/session/SessionProvider';
 import { SpeechProvider } from '@/speech/SpeechProvider';
 import { ThemeProvider } from '@/theme/ThemeProvider';
 import { VisitProvider } from '@/visits/VisitProvider';
-import { ChatScreen } from '@/screens/ChatScreen';
-import { CommunityScreen } from '@/screens/CommunityScreen';
-import { DealersScreen } from '@/screens/DealersScreen';
-import { HomeScreen } from '@/screens/HomeScreen';
-import { LocationSearchScreen } from '@/screens/LocationSearchScreen';
-import { SearchScreen } from '@/screens/SearchScreen';
-import { ProfileScreen } from '@/screens/ProfileScreen';
-import { ScanScreen } from '@/screens/ScanScreen';
+/*
+ * Screens load on demand, one chunk each: the first paint only needs the home
+ * tab, and a farmer who never opens Scan should never download the scan path.
+ * Each screen is a named export, so the lazy import maps it to a default.
+ */
+const ChatScreen = lazy(() =>
+  import('@/screens/ChatScreen').then((m) => ({ default: m.ChatScreen })),
+);
+const CommunityScreen = lazy(() =>
+  import('@/screens/CommunityScreen').then((m) => ({ default: m.CommunityScreen })),
+);
+const DealersScreen = lazy(() =>
+  import('@/screens/DealersScreen').then((m) => ({ default: m.DealersScreen })),
+);
+const HomeScreen = lazy(() =>
+  import('@/screens/HomeScreen').then((m) => ({ default: m.HomeScreen })),
+);
+const LocationSearchScreen = lazy(() =>
+  import('@/screens/LocationSearchScreen').then((m) => ({
+    default: m.LocationSearchScreen,
+  })),
+);
+const SearchScreen = lazy(() =>
+  import('@/screens/SearchScreen').then((m) => ({ default: m.SearchScreen })),
+);
+const ProfileScreen = lazy(() =>
+  import('@/screens/ProfileScreen').then((m) => ({ default: m.ProfileScreen })),
+);
+const ScanScreen = lazy(() =>
+  import('@/screens/ScanScreen').then((m) => ({ default: m.ScanScreen })),
+);
 
 /**
  * Two levels of navigation: the tab bar, and one pushed screen on top of it.
@@ -113,6 +138,7 @@ export function App({ services }: { services?: Services } = {}) {
 /** The screens and the tab bar — the part that needs the stores above it. */
 function Shell() {
   const chat = useChat();
+  const { t } = useLocale();
   const [view, setView] = useState<View>('tabs');
   const [tab, setTab] = useState<TabKey>('home');
   /*
@@ -159,6 +185,7 @@ function Shell() {
   return (
     <div className="mx-auto flex h-dvh w-full max-w-[430px] flex-col bg-background text-foreground">
       <main className="flex-1 overflow-y-auto">
+        <Suspense fallback={<LoadingState label={t('rates.loading')} />}>
         {view === 'profile' ? (
           <ProfileScreen
             onBack={() => setView('tabs')}
@@ -225,6 +252,7 @@ function Shell() {
           <ChatScreen onBrowseDealers={() => setTab('dealers')} />
         ) : null}
         {view === 'tabs' && tab === 'community' ? <CommunityScreen /> : null}
+        </Suspense>
       </main>
 
       {view === 'tabs' ? (
