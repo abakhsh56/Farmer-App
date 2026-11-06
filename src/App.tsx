@@ -27,19 +27,37 @@ import { VisitProvider } from '@/visits/VisitProvider';
  * maps it to a default.
  *
  * The suites were written when the screens rendered synchronously, and they ask
- * for what is on screen the moment it renders. The import is therefore started
- * when this module loads under test — the module graph is already in memory, so
- * the chunk is resolved by the time a suite renders and the screens keep
- * appearing. In the app nothing changes: the chunk is fetched only when its tab
- * is opened.
+ * for what is on screen the moment it renders. A plain `lazy` still suspends on
+ * its first render even with the module already loaded, and the suites ask
+ * before the retry lands — so under test the module is loaded when this module
+ * loads, and the resolved screen is kept here: by the time a suite renders, the
+ * screen is already in hand and renders synchronously, the way it did when the
+ * imports were static. In the app this never runs: the screen stays lazy and
+ * its chunk is fetched only when its tab is opened.
  */
 function lazyScreen<T extends ComponentType<any>>(
   load: () => Promise<{ default: T }>,
-) {
+): T {
+  let Resolved: T | null = null;
   if (import.meta.env.MODE === 'test') {
-    void load();
+    void load().then(
+      (m) => {
+        Resolved = m.default;
+      },
+      () => {
+        // The lazy render below retries the load and surfaces the error.
+      },
+    );
   }
-  return lazy(load);
+  const Lazy = lazy(load);
+  const Screen = ((props: any) => {
+    if (Resolved) {
+      const Component = Resolved;
+      return <Component {...props} />;
+    }
+    return <Lazy {...props} />;
+  }) as unknown as T;
+  return Screen;
 }
 
 const ChatScreen = lazyScreen(() =>
