@@ -491,12 +491,17 @@ export function HomeScreen({
           <p className="mt-3 text-body-sm text-white/70">{t('weather.loading')}</p>
         ) : null}
 
-        {reading !== null && reading.data.tempC !== null ? (
+        {reading !== null ? (
           /*
             The card's number is the door to the sky. It used to be a plain block,
             which left the fuller weather screen with no way in from the only
             surface that carries weather. Listen and Refresh sit outside this
             control, so each press still does exactly one thing.
+
+            The door stays open even when the reading failed: a farmer whose
+            weather could not be fetched still needs the detail screen (it shows
+            the forecast and the reason), and hiding the only way in behind a
+            temperature that is not there left him with nowhere to go.
           */
           <button
             type="button"
@@ -504,23 +509,31 @@ export function HomeScreen({
             className="mt-3 flex w-full items-center gap-3 text-start motion-safe:transition-transform motion-safe:active:scale-95"
           >
             <Cloud className="size-9 shrink-0 text-white" aria-hidden />
-            {/* lining-nums matters: Cormorant defaults to old-style figures, and a
+            {reading.data.tempC !== null ? (
+              <>
+                {/* lining-nums matters: Cormorant defaults to old-style figures, and a
                 temperature set in text figures reads as a broken number. */}
-            <span className="font-serif text-display lining-nums tabular-nums">
-              {Math.round(reading.data.tempC)}°
-            </span>
-            <span className="block text-label leading-relaxed text-white/70">
-              {reading.data.conditionKey
-                ? t(reading.data.conditionKey)
-                : (reading.data.conditionText ?? '')}
-              <br />
-              {reading.data.humidityPct !== null
-                ? `${t('weather.humidity', { value: reading.data.humidityPct })} · `
-                : ''}
-              {reading.data.windKph !== null
-                ? t('weather.windValue', { speed: Math.round(reading.data.windKph) })
-                : ''}
-            </span>
+                <span className="font-serif text-display lining-nums tabular-nums">
+                  {Math.round(reading.data.tempC)}°
+                </span>
+                <span className="block text-label leading-relaxed text-white/70">
+                  {reading.data.conditionKey
+                    ? t(reading.data.conditionKey)
+                    : (reading.data.conditionText ?? '')}
+                  <br />
+                  {reading.data.humidityPct !== null
+                    ? `${t('weather.humidity', { value: reading.data.humidityPct })} · `
+                    : ''}
+                  {reading.data.windKph !== null
+                    ? t('weather.windValue', { speed: Math.round(reading.data.windKph) })
+                    : ''}
+                </span>
+              </>
+            ) : (
+              <span className="block text-label leading-relaxed text-white/70">
+                {t('weather.open')}
+              </span>
+            )}
             <ChevronRight
               className="ms-auto size-4 shrink-0 self-start text-white/60 rtl:rotate-180"
               aria-hidden

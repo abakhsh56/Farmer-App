@@ -240,6 +240,35 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       try {
         const found = await readSavedLocation();
         if (cancelled) return;
+        const onDevice = readStoredLocation();
+
+        /*
+         * When both hold a location, the newer one wins. A device copy saved
+         * after the server's row is the farmer's latest choice; discarding it
+         * for a stale server row is how a just-saved location silently reverted
+         * to a village the farmer had already left. A row with no timestamp is
+         * treated as older than one that has one.
+         */
+        const deviceNewer =
+          onDevice !== null &&
+          onDevice.setAt !== null &&
+          (found === null || found.setAt === null || onDevice.setAt > found.setAt);
+
+        if (deviceNewer && onDevice) {
+          const migrated = await writeSavedLocation({
+            label: onDevice.label,
+            lat: onDevice.lat,
+            lon: onDevice.lon,
+            source: onDevice.source,
+            radiusKm: onDevice.radiusKm,
+          });
+          if (cancelled) return;
+          setSaved(migrated);
+          setRadiusKm(migrated.radiusKm);
+          writeStoredLocation(null);
+          setError(null);
+          return;
+        }
 
         if (found) {
           setSaved(found);
@@ -271,7 +300,6 @@ export function LocationProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        const onDevice = readStoredLocation();
         if (!onDevice) {
           setSaved(null);
           setError(null);
@@ -287,6 +315,7 @@ export function LocationProvider({ children }: { children: ReactNode }) {
         });
         if (cancelled) return;
         setSaved(migrated);
+        setRadiusKm(migrated.radiusKm);
         writeStoredLocation(null);
         setError(null);
       } catch (failure) {
@@ -378,13 +407,21 @@ export function LocationProvider({ children }: { children: ReactNode }) {
   }, [signedIn]);
 
   const value = useMemo<LocationValue>(() => {
-    const activePoint: GeoPoint = temporary
-      ? { lat: temporary.lat, lon: temporary.lon }
-      : saved
-        ? { lat: saved.lat, lon: saved.lon }
+    /*
+     * The saved location is the authority for where the farmer is. A temporary
+     * area is a dealer search ("show me shops near Kot Ladha"), and the PRD says
+     * it must never silently replace the saved location — so it only fills in
+     * when there is no saved location yet (onboarding, before the first save).
+     * Preferring it above the saved location is how a stale search hijacked the
+     * weather, the dealers and the mandi rates for the farmer's own village.
+     */
+    const activePoint: GeoPoint = saved
+      ? { lat: saved.lat, lon: saved.lon }
+      : temporary
+        ? { lat: temporary.lat, lon: temporary.lon }
         : PROFILE_POINT;
 
-    const placeLabel = temporary?.label ?? saved?.label ?? '';
+    const placeLabel = saved?.label ?? temporary?.label ?? '';
 
     return {
       saved,
@@ -396,7 +433,7 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       // server for the saved location", so the two never compete.
       searchOrigin: temporary ? { lat: temporary.lat, lon: temporary.lon } : undefined,
       placeLabel,
-      isTemporary: temporary !== null,
+      isTemporary: saved === null && temporary !== null,
       hasSaved: saved !== null,
       savedOnDevice: saved !== null && !signedIn,
       canSave: true,
