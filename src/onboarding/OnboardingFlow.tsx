@@ -406,7 +406,7 @@ function Splash({
       </div>
 
       <div className="text-center">
-        <p className="font-serif text-3xl font-semibold tracking-tight">AgriShop</p>
+        <p className="font-serif text-3xl font-semibold tracking-tight">Farmer App</p>
         <p className="mt-2 text-sm text-muted-foreground">{inLocale(COPY.tagline, locale)}</p>
       </div>
 
