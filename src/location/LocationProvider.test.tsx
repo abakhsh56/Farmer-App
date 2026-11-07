@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocationProvider, useLocation } from '@/location/LocationProvider';
 import {
@@ -7,6 +7,7 @@ import {
   writeSavedLocation,
   type SavedLocation,
 } from '@/services/location';
+import { currentSessionUser, getSupabaseClient } from '@/services/supabaseClient';
 
 /**
  * One owner per value: where the saved location comes from, and what is left on
@@ -43,8 +44,22 @@ vi.mock('@/services/config', async (importOriginal) => {
   };
 });
 
+/*
+ * The provider asks Supabase itself whether a session is live before trusting
+ * the server branch. That is a local read in production, but here the client
+ * would be a real one pointed at a fake URL — so the session is stubbed, and a
+ * test that wants "no session" sets it to null.
+ */
+vi.mock('@/services/supabaseClient', () => ({
+  currentSessionUser: vi.fn(),
+  getSupabaseClient: vi.fn(),
+}));
+
 /** Mutable so a single file can be both a guest and a farmer. */
-const mockSession: { account: { partyId: string } | null } = { account: null };
+const mockSession: { account: { partyId: string | null } | null } = { account: null };
+
+/** A live Supabase session, as the provider sees it. */
+const LIVE_SESSION = { id: 'auth-user-id', phone: null, email: 'abakhsh56@gmail.com' };
 
 vi.mock('@/session/SessionProvider', () => ({
   useSession: () => mockSession,
@@ -95,6 +110,20 @@ function Probe() {
       <dd data-testid="radius">{location.radiusKm}</dd>
       <dt>On the phone</dt>
       <dd data-testid="on-device">{String(location.savedOnDevice)}</dd>
+      <dt>Error</dt>
+      <dd data-testid="error">{location.error ?? 'none'}</dd>
+      <dt>Save</dt>
+      <dd>
+        <button
+          type="button"
+          data-testid="save-lahore"
+          onClick={() =>
+            void location.save({ label: 'Lahore', lat: 31.5204, lon: 74.3587, source: 'search' })
+          }
+        >
+          Save Lahore
+        </button>
+      </dd>
     </dl>
   );
 }
@@ -109,6 +138,14 @@ const open = () =>
 beforeEach(() => {
   localStorage.clear();
   mockSession.account = { partyId: PARTY_ID };
+
+  /* A live session by default: the signed-in tests are about an account the
+     server actually answers for. A test that wants "no session" sets it to
+     null. */
+  vi.mocked(getSupabaseClient).mockReset();
+  vi.mocked(getSupabaseClient).mockResolvedValue({} as never);
+  vi.mocked(currentSessionUser).mockReset();
+  vi.mocked(currentSessionUser).mockResolvedValue(LIVE_SESSION);
 
   /* Defaults, stated rather than inherited: a test that forgets to set one gets
      an empty account rather than the previous test's answer. */
@@ -199,5 +236,54 @@ describe('a guest', () => {
     // A guest's own area survives: it is kept on the phone, and said so.
     expect(JSON.parse(localStorage.getItem(DEVICE_KEY) ?? '{}').label).toBe('Alipur');
     expect(screen.getByTestId('on-device')).toHaveTextContent('true');
+  });
+});
+
+describe('an account that is only local', () => {
+  it('has no party id, so it reads the phone and saves to the phone', async () => {
+    // A local/demo account object with no server-issued party id: the account
+    // exists on the phone, but it owns nothing on the server.
+    mockSession.account = { partyId: null };
+    localStorage.setItem(DEVICE_KEY, JSON.stringify(GUEST_AREA));
+
+    open();
+
+    await waitFor(() => expect(screen.getByTestId('area')).toHaveTextContent('Alipur'));
+
+    // The server is never asked: there is no account for it to answer for.
+    expect(readSavedLocation).not.toHaveBeenCalled();
+    expect(writeSavedLocation).not.toHaveBeenCalled();
+    expect(screen.getByTestId('on-device')).toHaveTextContent('true');
+
+    // Saving works without sign-in: it goes to the phone, not the server, and
+    // no sign-in error is raised.
+    fireEvent.click(screen.getByTestId('save-lahore'));
+    await waitFor(() => expect(screen.getByTestId('area')).toHaveTextContent('Lahore'));
+    expect(writeSavedLocation).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(DEVICE_KEY) ?? '{}').label).toBe('Lahore');
+    expect(screen.getByTestId('error')).toHaveTextContent('none');
+  });
+});
+
+describe('an account whose session is gone', () => {
+  it('reads the phone and saves to the phone when Supabase has no session', async () => {
+    // A party id from an earlier sign-in, but the token is gone in this
+    // browser: the server would refuse the write, so the phone is used.
+    vi.mocked(currentSessionUser).mockResolvedValue(null);
+    localStorage.setItem(DEVICE_KEY, JSON.stringify(GUEST_AREA));
+
+    open();
+
+    await waitFor(() => expect(screen.getByTestId('area')).toHaveTextContent('Alipur'));
+
+    // The server is never asked: there is no live session for it to answer.
+    expect(readSavedLocation).not.toHaveBeenCalled();
+    expect(writeSavedLocation).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('save-lahore'));
+    await waitFor(() => expect(screen.getByTestId('area')).toHaveTextContent('Lahore'));
+    expect(writeSavedLocation).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(DEVICE_KEY) ?? '{}').label).toBe('Lahore');
+    expect(screen.getByTestId('error')).toHaveTextContent('none');
   });
 });

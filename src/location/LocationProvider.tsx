@@ -17,6 +17,7 @@ import {
   type PickedSource,
   type SavedLocation,
 } from '@/services/location';
+import { currentSessionUser, getSupabaseClient } from '@/services/supabaseClient';
 import type { GeoPoint } from '@/services/types';
 import { useSession } from '@/session/SessionProvider';
 
@@ -94,7 +95,8 @@ export type LocationValue = {
    */
   radiusKm: number;
   setRadiusKm: (next: number) => void;
-  /** False for a guest: saving needs an account. */
+  /** Always true: anyone can save. The write goes to the account when there
+   * is one and to the phone otherwise. */
   canSave: boolean;
   canClearSaved: boolean;
   loading: boolean;
@@ -211,7 +213,35 @@ export function LocationProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const backendLive = serviceConfig.supabase.configured;
-  const signedIn = account !== null;
+  /*
+   * Signed in means the account is a real one the server issued — not just a
+   * local document. The session store's account can exist without a party id
+   * (a demo/local account created without the server), and a party id is what
+   * the database matches every policy against. An account without one owns
+   * nothing on the server, so it is a guest for every server write, and its
+   * location lives on the phone.
+   */
+  const signedIn = account !== null && account.partyId !== null;
+
+  /*
+   * Whether Supabase itself has a live session for this farmer, right now.
+   *
+   * The local account document and the Supabase token live in different stores
+   * and can drift apart: the document survives a cleared or expired token, so
+   * a party id alone is not proof the server will answer. A server write needs
+   * the token, so the decision is made from the session itself — read locally,
+   * no network — rather than from the account the phone remembers.
+   */
+  const hasRealSession = useCallback(async (): Promise<boolean> => {
+    if (!backendLive) return false;
+    try {
+      await getSupabaseClient(serviceConfig.supabase);
+      const user = await currentSessionUser();
+      return user !== null;
+    } catch {
+      return false;
+    }
+  }, [backendLive]);
 
   /*
    * Which answer is read depends on whether there is an account to read it from.
@@ -238,6 +268,21 @@ export function LocationProvider({ children }: { children: ReactNode }) {
 
     void (async () => {
       try {
+        /*
+         * No live session: the server cannot answer for this farmer, so the
+         * phone's copy is the truth for now. The hand-over runs when a session
+         * exists; attempting it now would only raise "Sign in to save a
+         * location." on every launch, and the device copy would be lost from
+         * the screen even though it is still on the phone.
+         */
+        const live = await hasRealSession();
+        if (cancelled) return;
+        if (!live) {
+          setSaved(readStoredLocation());
+          setError(null);
+          return;
+        }
+
         const found = await readSavedLocation();
         if (cancelled) return;
         const onDevice = readStoredLocation();
@@ -329,7 +374,7 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [backendLive, signedIn, account?.partyId, attempt, setRadiusKm]);
+  }, [backendLive, signedIn, account?.partyId, attempt, setRadiusKm, hasRealSession]);
 
   const setTemporary = useCallback((area: TemporaryArea | null) => {
     setTemporaryState(area);
@@ -365,12 +410,17 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       setSaving(true);
       try {
         /*
-         * Where it is written depends on whether there is an account to write it
-         * to — not on whether the farmer is *allowed* to choose. Both branches
-         * produce the same record and the same app afterwards.
+         * Where it is written depends on whether there is a real session to
+         * write it with — not on whether the farmer is *allowed* to choose.
+         * A local account document is not a session: the token may have
+         * expired or never existed in this browser, and the server refuses a
+         * write without one. When there is no live session the phone is the
+         * honest place for the location, and it drives exactly the same
+         * screens; the hand-over moves it to the account on sign-in.
          */
         let result: SavedLocation;
-        if (signedIn) {
+        const live = signedIn ? await hasRealSession() : false;
+        if (live) {
           result = await writeSavedLocation({ label, lat, lon, source, radiusKm });
         } else {
           result = { label, lat, lon, source, setAt: Date.now(), radiusKm };
@@ -389,13 +439,16 @@ export function LocationProvider({ children }: { children: ReactNode }) {
         setSaving(false);
       }
     },
-    [temporary, saved, signedIn],
+    [temporary, saved, signedIn, hasRealSession],
   );
 
   const forget = useCallback(async () => {
     setSaving(true);
     try {
-      if (signedIn) await clearSavedLocation();
+      // Only the server's copy is cleared when there is a live session to
+      // clear it with; the phone's copy is always cleared, so a guest's
+      // forget never fails on a server it cannot reach.
+      if (signedIn && (await hasRealSession())) await clearSavedLocation();
       writeStoredLocation(null);
       setSaved(null);
       setError(null);
@@ -404,7 +457,7 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     } finally {
       setSaving(false);
     }
-  }, [signedIn]);
+  }, [signedIn, hasRealSession]);
 
   const value = useMemo<LocationValue>(() => {
     /*
