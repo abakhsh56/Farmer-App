@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppTabBar, type TabKey } from '@/components/AppTabBar';
 import { Toaster } from '@/components/ui/sonner';
 import { ChatProvider, useChat } from '@/chat/ChatProvider';
@@ -11,7 +11,7 @@ import {
   isOnboardingComplete,
   OnboardingFlow,
 } from '@/onboarding/OnboardingFlow';
-import { ServicesProvider, type Services } from '@/services/registry';
+import { ServicesProvider, useServices, type Services } from '@/services/registry';
 import { SessionProvider } from '@/session/SessionProvider';
 import { SpeechProvider } from '@/speech/SpeechProvider';
 import { ThemeProvider } from '@/theme/ThemeProvider';
@@ -116,6 +116,27 @@ function Shell() {
   const chat = useChat();
   const [view, setView] = useState<View>('tabs');
   const [tab, setTab] = useState<TabKey>('home');
+  const services = useServices();
+  const appOpenedSent = useRef(false);
+
+  /*
+   * Product analytics: which screens farmers actually open. The analytics
+   * provider is a no-op when no key is configured, so these calls are safe
+   * unconditionally — and the screen name is a constant from our own
+   * navigation, never user text.
+   */
+  const screenName =
+    view === 'tabs' ? tab : view === 'locationSearch' ? 'location_search' : view;
+
+  useEffect(() => {
+    if (appOpenedSent.current) return;
+    appOpenedSent.current = true;
+    services.analytics.capture('app_opened');
+  }, [services]);
+
+  useEffect(() => {
+    services.analytics.capture('screen_viewed', { screen: screenName });
+  }, [services, screenName]);
   /*
    * Where the place-search screen goes back to. It is opened from the dealer
    * filter and from Profile's own location slot, and it has to return the farmer
