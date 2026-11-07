@@ -163,6 +163,10 @@ describe('pickVoice falls back to Urdu without a Saraiki voice', () => {
  * through `onStart`, and a refusal before it begins through `onStartFailed`.
  * A caller that treats the boolean as "speaking" shows a speaking state for
  * a press the engine refused — the silent failure this guards against.
+ *
+ * The voice also reads slower than the platform default — advice a farmer
+ * acts on in a field is not a screen reader, so the rate is a comfortable
+ * 0.85, not the default 1.
  */
 describe('speakText reports whether the first part actually begins', () => {
   afterEach(() => {
@@ -176,6 +180,12 @@ describe('speakText reports whether the first part actually begins', () => {
   it('returns false for empty text even with an engine', () => {
     installSpeechEngine('start');
     expect(speakText('   ', { lang: 'ur-PK' })).toBe(false);
+  });
+
+  it('reads slower than the platform default', () => {
+    const engine = installSpeechEngine('start');
+    speakText('hello', { lang: 'ur-PK' });
+    expect(engine.spoken[0]?.rate).toBe(0.85);
   });
 
   it('fires onStart and onEnd when the engine begins', async () => {
@@ -230,5 +240,58 @@ describe('waitForVoices waits for a late voice list', () => {
     engine.setVoices([voice('ur-PK', 'Urdu (Pakistan)')]);
     engine.emitVoicesChanged();
     await expect(pending).resolves.toEqual([voice('ur-PK', 'Urdu (Pakistan)')]);
+  });
+});
+
+/**
+ * A Stop leaves the reading where it was, and the next Listen resumes from
+ * the sentence it was on — it does not start again from the beginning. The
+ * position is the part index, reported as each part begins, and a reading
+ * that ran to its end forgets it.
+ */
+describe('speakText resumes from a stopped part', () => {
+  afterEach(() => {
+    removeSpeechEngine();
+  });
+
+  /* Three sentences, each too long to pack with the next, so the text is
+     three parts and the indices are the sentence numbers. */
+  const THREE_PARTS =
+    'The spray window opens at noon and closes before the evening rain arrives over the fields and roads. ' +
+    'Winds stay light through the afternoon, so the spray settles on the leaves where it should fall and stay. ' +
+    'Finish before noon, because the rain after four will wash the spray away from the crop rows and soil.';
+
+  it('queues only the parts from fromPart onward, with absolute indices', async () => {
+    const engine = installSpeechEngine('start');
+    const onPartStart = vi.fn();
+    const onComplete = vi.fn();
+    expect(
+      speakText(THREE_PARTS, { lang: 'ur-PK', onPartStart, onComplete, fromPart: 1 }),
+    ).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(engine.spoken.map((utterance) => utterance.text)).toEqual([
+      'Winds stay light through the afternoon, so the spray settles on the leaves where it should fall and stay.',
+      'Finish before noon, because the rain after four will wash the spray away from the crop rows and soil.',
+    ]);
+    expect(onPartStart.mock.calls).toEqual([[1], [2]]);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts from the beginning when fromPart is omitted', async () => {
+    const engine = installSpeechEngine('start');
+    const onPartStart = vi.fn();
+    speakText(THREE_PARTS, { lang: 'ur-PK', onPartStart });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(engine.spoken).toHaveLength(3);
+    expect(onPartStart.mock.calls).toEqual([[0], [1], [2]]);
+  });
+
+  it('does not report completion when the first part is refused', async () => {
+    const engine = installSpeechEngine('refuse');
+    const onComplete = vi.fn();
+    speakText(THREE_PARTS, { lang: 'ur-PK', onComplete, fromPart: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(engine.spoken).toHaveLength(2);
   });
 });

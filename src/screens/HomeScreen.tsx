@@ -3,12 +3,13 @@ import {
   ChevronRight,
   Cloud,
   CreditCard,
+  Loader2,
   MapPin,
   RefreshCw,
   Sprout,
   Volume2,
 } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { SectionLabel } from '@/components/SectionLabel';
 import { CropCard, NotificationBell } from '@/components/insights/Insights';
@@ -250,18 +251,21 @@ export function HomeScreen({
   const speech = useSpeech();
   const speechTag = LOCALE_REGISTRY.ur.tag;
   const listening = speech.speaking === 'weather';
+  /* The pill shows a spinner while the voice is still arriving, not a
+     Listen that sits silent — a press joins the download already running. */
+  const voiceLoading = speech.voiceLoading && !listening;
   /*
    * The words behind the Listen pill — always in Urdu, and told like a
-   * person explaining, not read off the screen. The farmer hears where
-   * this is about and what the weather is doing there, in one sentence,
-   * and then what it means for him, in the top advisory item's own
-   * listen text. The humidity and wind are not read out as bare figures:
-   * the advice already names the wind when it is the reason to act, and
-   * the screen still shows the numbers.
+   * person explaining, not read off the screen. The farmer hears what the
+   * weather is doing, in one sentence, and then what it means for him, in
+   * the top advisory item's own listen text. The place is never spoken —
+   * he is looking at the card for his own area, and naming it adds nothing
+   * to what he has to do. The humidity and wind are not read out as bare
+   * figures: the advice already names the wind when it is the reason to
+   * act, and the screen still shows the numbers.
    */
   const topListen = advisoryCopies[0]?.listenText ?? '';
-  /* The place first, then the weather and the advice for it — the farmer
-     hears where this is about before he hears what to do. */
+  /* The weather and the advice for it — never the place. */
   const conditionText = reading?.data.conditionKey
     ? tIn('ur', reading.data.conditionKey)
     : reading?.data.conditionText ?? null;
@@ -269,18 +273,16 @@ export function HomeScreen({
     reading?.data.tempC === null || reading?.data.tempC === undefined
       ? null
       : tIn('ur', 'weather.spokenTemp', { value: Math.round(reading.data.tempC) });
-  const placeText = location.placeLabel || null;
   /* One sentence for the setting; when a part is missing the opening falls
      back to the parts that are there, so a missing number never leaves a
      hole in the sentence. */
   const opening =
-    placeText && conditionText && tempText
+    conditionText && tempText
       ? tIn('ur', 'weather.spoken.opening', {
-          place: placeText,
           condition: conditionText,
           temp: tempText,
         })
-      : [placeText, conditionText, tempText]
+      : [conditionText, tempText]
           .filter((part): part is string => Boolean(part))
           .join('، ');
   const spokenAdvice =
@@ -297,6 +299,22 @@ export function HomeScreen({
    */
   const stopSpeech = speech.stop;
   useEffect(() => () => stopSpeech(), [stopSpeech]);
+
+  /*
+   * The voice is fetched in the background the moment Home opens: a phone
+   * has no hover, so the pill's hover/focus warm-up never fires there, and
+   * the first press would otherwise begin with the 63 MB download on a slow
+   * connection. Nothing is said; the pill shows the voice arriving. The load
+   * is shared — a second call joins the one already running — so opening Home
+   * again cannot start a second download.
+   */
+  const preloadVoice = speech.preloadVoice;
+  const voicePreloaded = useRef(false);
+  useEffect(() => {
+    if (voicePreloaded.current) return;
+    voicePreloaded.current = true;
+    preloadVoice();
+  }, [preloadVoice]);
 
   /*
    * Insight advice is not listed here any more: it lives in the advisory
@@ -496,11 +514,25 @@ export function HomeScreen({
                     toast.error(t('weather.listenUnavailable'));
                   });
               }}
-              aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
+              aria-label={
+                listening
+                  ? t('weather.stopListening')
+                  : voiceLoading
+                    ? t('weather.listenLoading')
+                    : t('weather.listen')
+              }
               className="flex items-center gap-1.5 rounded-full bg-white/12 px-3 py-1.5 text-label text-white"
             >
-              <Volume2 className="size-4" aria-hidden />
-              {listening ? t('weather.stopListening') : t('weather.listen')}
+              {voiceLoading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Volume2 className="size-4" aria-hidden />
+              )}
+              {listening
+                ? t('weather.stopListening')
+                : voiceLoading
+                  ? t('weather.listenLoading')
+                  : t('weather.listen')}
             </button>
           ) : null}
         </div>

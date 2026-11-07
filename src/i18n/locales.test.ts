@@ -90,4 +90,16 @@ describe('fallback resolution', () => {
     console.log(`translation coverage — ${report}`);
     expect(report).toContain('en=100.0%');
   });
+
+  it('never names the place in the spoken opening', () => {
+    // The Listen pill reads the weather and the advice, not the place — the
+    // farmer is looking at the card for his own area, and naming it adds
+    // nothing to what he has to do.
+    for (const locale of ['en', 'ur'] as const) {
+      const opening = catalogs[locale]['weather.spoken.opening'];
+      expect(opening).not.toContain('{place}');
+      expect(opening).toContain('{condition}');
+      expect(opening).toContain('{temp}');
+    }
+  });
 });

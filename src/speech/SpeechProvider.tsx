@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
   pickVoice,
+  preloadAppVoice,
   speakText,
   speakWithAppVoice,
   speechSupported,
@@ -17,6 +18,11 @@ import {
   waitForVoices,
   warmAppVoice,
 } from '@/services/speech';
+import {
+  getVoiceLoadState,
+  subscribeVoiceLoadState,
+  type VoiceLoadState,
+} from '@/services/piper';
 import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
 
 /**
@@ -40,8 +46,10 @@ import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
  * see `services/piper.ts`). Only when that voice cannot run does the
  * browser's own text-to-speech answer: a native Saraiki voice when the
  * device has one — reading the Urdu advice the app has, since there is no
- * Saraiki advice text yet — and otherwise a matched Urdu voice, and
- * otherwise the engine's best voice for the language tag.
+ * Saraiki advice text yet — and otherwise a matched Urdu voice. Without
+ * either, the press is answered with a message, not with the engine's
+ * default voice: on a device with no Urdu voice that default reads Urdu
+ * script in English, which is the failure this voice exists to avoid.
  *
  * Queueing is not starting. The engine can take the words and then refuse
  * them — no voice it will use, or the utterance rejected — and that refusal
@@ -81,6 +89,21 @@ export type SpeechValue = {
    * browser's own voice needs no warming; only Piper does.
    */
   warm: (lang: string, text: string) => void;
+  /**
+   * Starts fetching the app's Urdu voice in the background, without speaking
+   * and without knowing the words yet.
+   *
+   * Called when the home screen opens: a phone has no hover, so the pill's
+   * hover/focus warm-up never fires there, and the first press would
+   * otherwise begin with the 63 MB download on a slow connection.
+   */
+  preloadVoice: () => void;
+  /**
+   * True while the app's Urdu voice is still arriving. The pill shows this
+   * instead of sitting silent — a press joins the download already running,
+   * and a load that fails is answered with the toast, not silence.
+   */
+  voiceLoading: boolean;
   stop: () => void;
 };
 
@@ -92,6 +115,17 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     supported ? window.speechSynthesis.getVoices() : [],
   );
   const [speaking, setSpeaking] = useState<string | null>(null);
+  /* Whether the app's Urdu voice is still arriving. The pill shows this
+     instead of sitting silent while the 63 MB model downloads. */
+  const [voiceLoading, setVoiceLoading] = useState<boolean>(
+    () => getVoiceLoadState() === 'loading',
+  );
+
+  useEffect(() => {
+    const sync = (state: VoiceLoadState) => setVoiceLoading(state === 'loading');
+    sync(getVoiceLoadState());
+    return subscribeVoiceLoadState(sync);
+  }, []);
   /* Pressing read-aloud is the farmer saying he listens rather than reads —
      the strongest voice-first signal there is. */
   const capability = useCapabilityRecorder();
@@ -99,6 +133,11 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
      or a newer press — can settle it as handled rather than letting the
      refusal the stop causes report a failure the farmer did not have. */
   const cancelPendingSpeak = useRef<(() => void) | null>(null);
+  /* Where each reading was stopped, by its own words: a press after Stop
+     resumes from the sentence it was on, not from the beginning. Keyed by
+     the words themselves, so a reading whose advice has changed starts
+     fresh, and a reading that ran to its end is forgotten. */
+  const resumeAt = useRef(new Map<string, number>());
 
   useEffect(() => {
     if (!supported) return;
@@ -137,6 +176,13 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const preloadVoice = useCallback(() => {
+    /* The model arrives in the background; nothing is said. A failure here
+       is silent on purpose — nothing was asked for yet, and the press that
+       follows reports the cause itself. */
+    preloadAppVoice();
+  }, []);
+
   const speak = useCallback<SpeechValue['speak']>(
     async ({ id, text, lang }) => {
       try {
@@ -170,13 +216,25 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           const onEnd = () => {
             setSpeaking((current) => (current === id ? null : current));
           };
+          /* A press after Stop resumes from the sentence it was on. */
+          const fromPart = resumeAt.current.get(text) ?? 0;
+          const onPartStart = (index: number) => {
+            resumeAt.current.set(text, index);
+          };
+          const onComplete = () => {
+            resumeAt.current.delete(text);
+          };
 
           void (async () => {
             /* Piper first: the natural neural voice. A model that cannot be
                reached is a fall-through to the browser's voice, not a
                silence — and a press stopped or superseded while the model
                was loading is handled, not failed. */
-            const piperStarted = await speakWithAppVoice(text, onEnd);
+            const piperStarted = await speakWithAppVoice(text, onEnd, {
+              fromPart,
+              onPartStart,
+              onComplete,
+            });
             if (settled) return;
             if (piperStarted) {
               settle(true);
@@ -184,10 +242,10 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
             }
 
             /* The browser's own voice: a Saraiki voice first when the
-               device has one, then a matched Urdu voice; without either the
-               utterance still goes to the engine with the language set, and
-               the engine picks its best voice for it — which on a phone
-               with Urdu installed is the Urdu voice. */
+               device has one, then a matched Urdu voice. Without either
+               the press is answered with a message, not with the engine's
+               default — which on a device with no Urdu voice reads Urdu
+               script in English, the failure this voice exists to avoid. */
             if (!supported) {
               settle(false);
               return;
@@ -199,6 +257,10 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
             if (settled) return;
             const allVoices = liveVoices.length > 0 ? liveVoices : voices;
             const voice = pickVoice(allVoices, lang);
+            if (!voice) {
+              settle(false);
+              return;
+            }
             /* A first part that has not begun in this long is not going to:
                the engine has refused it without saying so, and leaving the
                pill in its speaking state would be the same silence. */
@@ -208,7 +270,16 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
             }, 2500);
             const onStart = () => settle(true);
             const onStartFailed = () => settle(false);
-            const queued = speakText(text, { lang, voice, onStart, onEnd, onStartFailed });
+            const queued = speakText(text, {
+              lang,
+              voice,
+              onStart,
+              onEnd,
+              onStartFailed,
+              onComplete,
+              onPartStart,
+              fromPart,
+            });
             if (!queued) settle(false);
           })();
         });
@@ -223,8 +294,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<SpeechValue>(
-    () => ({ supported, speaking, speak, warm, stop }),
-    [supported, speaking, speak, warm, stop],
+    () => ({ supported, speaking, speak, warm, preloadVoice, voiceLoading, stop }),
+    [supported, speaking, speak, warm, preloadVoice, voiceLoading, stop],
   );
 
   return <SpeechContext.Provider value={value}>{children}</SpeechContext.Provider>;

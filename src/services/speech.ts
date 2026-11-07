@@ -68,13 +68,15 @@ const CHUNK_CHARS = 180;
 
 
 /**
- * A shade under normal speed.
+ * Comfortably under normal speed.
  *
  * Advice is the one thing on these screens a farmer may write down or repeat to
  * someone, and the platforms' default rate is tuned for a screen reader used by
- * someone following along with their eyes.
+ * someone following along with their eyes. A farmer listening in a field is not
+ * following along with his eyes, so the voice reads slower than the default —
+ * slow enough to follow, not so slow it drags.
  */
-const RATE = 0.95;
+const RATE = 0.85;
 
 /**
  * The speech engine, read through a check rather than assumed.
@@ -204,6 +206,24 @@ export type SpeakOptions = {
    * which the boolean return alone cannot tell apart.
    */
   onStartFailed?: () => void;
+  /**
+   * Fired when the last part ends naturally — the reading ran to its end,
+   * not a stop or a refusal. The caller uses it to forget a resume position,
+   * so a fresh press starts from the beginning.
+   */
+  onComplete?: () => void;
+  /**
+   * Fired when a part begins, with its absolute index in the text. The
+   * caller records it as the resume position, so a press after Stop
+   * continues from the sentence it was on.
+   */
+  onPartStart?: (index: number) => void;
+  /**
+   * Resumes a reading that was stopped: parts before this index are not
+   * queued, so the reading continues from the sentence it was on instead of
+   * starting again from the beginning.
+   */
+  fromPart?: number;
 };
 
 /**
@@ -275,7 +295,29 @@ function freeVoiceUrls(): void {
  * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
  * offers a warm-up for a finger that is already on the pill.
  */
-export async function speakWithAppVoice(text: string, onEnd?: () => void): Promise<boolean> {
+export async function speakWithAppVoice(
+  text: string,
+  onEnd?: () => void,
+  options?: {
+    /**
+     * Resumes a reading that was stopped: parts before this index are not
+     * made and not played, so the reading continues from the sentence it
+     * was on instead of starting again from the beginning.
+     */
+    fromPart?: number;
+    /**
+     * Fired when a part begins playing, with its absolute index in the text.
+     * The caller records it as the resume position.
+     */
+    onPartStart?: (index: number) => void;
+    /**
+     * Fired when the last part ends naturally — the reading ran to its end,
+     * not a stop. The caller uses it to forget a resume position, so a
+     * fresh press starts from the beginning.
+     */
+    onComplete?: () => void;
+  },
+): Promise<boolean> {
   if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
   const token = ++voiceToken;
 
@@ -288,7 +330,7 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
   element.pause();
   freeVoiceUrls();
 
-  const queue: string[] = [];
+  const queue: { url: string; index: number }[] = [];
   let synthesisFinished = false;
   let busy = false;
   let handed = 0;
@@ -308,38 +350,52 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
     /* Stopped, or replaced by a newer press: the queue is not ours any more. */
     if (token !== voiceToken || busy) return;
 
-    const url = queue.shift();
-    if (!url) {
-      if (synthesisFinished) onEnd?.();
+    const next = queue.shift();
+    if (!next) {
+      if (synthesisFinished) {
+        onEnd?.();
+        /* The last part ended on its own: the reading ran to its end, so a
+           fresh press starts from the beginning. A stop never reaches here —
+           the token is bumped before the queue is drained. */
+        options?.onComplete?.();
+      }
       return;
     }
 
     busy = true;
     const done = () => {
       busy = false;
-      freeVoiceUrl(url);
+      freeVoiceUrl(next.url);
       pump();
     };
     element.onended = done;
     /* A part that will not play is skipped rather than left as a silence in the
        middle of the advice; the reading only stops if the last part fails. */
     element.onerror = done;
-    element.src = url;
+    element.src = next.url;
     void element.play().then(
-      () => answer(true),
+      () => {
+        answer(true);
+        /* This part is playing: a Stop now leaves the resume position on it. */
+        options?.onPartStart?.(next.index);
+      },
       done,
     );
   };
 
-  const spoken = await synthesiseUrduSpeech(text, (audio) => {
-    /* The farmer stopped, or pressed again, while this part was being made. */
-    if (token !== voiceToken) return;
-    const url = URL.createObjectURL(audio);
-    voiceUrls.push(url);
-    queue.push(url);
-    handed += 1;
-    pump();
-  });
+  const spoken = await synthesiseUrduSpeech(
+    text,
+    (audio, index) => {
+      /* The farmer stopped, or pressed again, while this part was being made. */
+      if (token !== voiceToken) return;
+      const url = URL.createObjectURL(audio);
+      voiceUrls.push(url);
+      queue.push({ url, index });
+      handed += 1;
+      pump();
+    },
+    options?.fromPart ?? 0,
+  );
 
   synthesisFinished = true;
   if (token !== voiceToken) {
@@ -367,6 +423,22 @@ export function warmAppVoice(text: string): void {
 }
 
 /**
+ * Starts getting the app's Urdu voice ready in the background, without
+ * pressing anything and without knowing the words yet: the model arrives so
+ * a press finds it already there.
+ *
+ * Called when the home screen opens — a phone has no hover, so the pill's
+ * hover/focus warm-up never fires there, and the first press would otherwise
+ * begin with the 63 MB download on a slow connection. Nothing is said, and
+ * the pill shows the voice arriving (see `SpeechProvider.voiceLoading`).
+ */
+export function preloadAppVoice(): void {
+  void import('./piper')
+    .then((piper) => piper.warmUrduVoice())
+    .catch(() => undefined);
+}
+
+/**
  * Reads the text aloud. Returns false only when it could not even be
  * queued — no engine, or no words. Queueing is not starting: whether the
  * first part actually begins is reported through `onStart`, and a refusal
@@ -374,11 +446,24 @@ export function warmAppVoice(text: string): void {
  * boolean as "speaking" will show a speaking state for a press the engine
  * refused, which is how a tap that does nothing looks like it worked.
  */
-export function speakText(text: string, { lang, voice, onStart, onEnd, onStartFailed }: SpeakOptions): boolean {
+export function speakText(
+  text: string,
+  {
+    lang,
+    voice,
+    onStart,
+    onEnd,
+    onStartFailed,
+    onComplete,
+    onPartStart,
+    fromPart = 0,
+  }: SpeakOptions,
+): boolean {
   const target = engine();
   if (!target) return false;
 
-  const parts = splitForSpeech(text);
+  /* A resume starts from the sentence it was on, not from the beginning. */
+  const parts = splitForSpeech(text).slice(fromPart);
   if (parts.length === 0) return false;
 
   /* One voice at a time: a second press replaces the first rather than layering
@@ -403,6 +488,7 @@ export function speakText(text: string, { lang, voice, onStart, onEnd, onStartFa
   };
 
   parts.forEach((part, index) => {
+    const absoluteIndex = fromPart + index;
     const utterance = new target.Utterance(part);
     utterance.lang = lang;
     if (voice) utterance.voice = voice;
@@ -410,11 +496,16 @@ export function speakText(text: string, { lang, voice, onStart, onEnd, onStartFa
 
     const isFirst = index === 0;
     const isLast = index === parts.length - 1;
-    if (isFirst) {
-      utterance.onstart = () => {
+    utterance.onstart = () => {
+      /* Every part reports where it began, so a Stop leaves the resume
+         position on the sentence it was on. */
+      onPartStart?.(absoluteIndex);
+      if (isFirst) {
         started = true;
         onStart?.();
-      };
+      }
+    };
+    if (isFirst) {
       /* An error before the first part begins is a refusal, not an ending;
          after speaking has begun it is an ending like any other. */
       utterance.onerror = () => {
@@ -423,7 +514,13 @@ export function speakText(text: string, { lang, voice, onStart, onEnd, onStartFa
       };
     }
     if (isLast) {
-      utterance.onend = () => finish();
+      utterance.onend = () => {
+        finish();
+        /* The last part ended on its own: the reading ran to its end, so a
+           fresh press starts from the beginning. A stop never reaches here —
+           cancelling fires an error, not an end. */
+        onComplete?.();
+      };
       if (!isFirst) {
         utterance.onerror = () => finish();
       }

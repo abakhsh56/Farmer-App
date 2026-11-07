@@ -17,12 +17,18 @@
  * 63 MB model itself comes from elsewhere, because GitHub refuses a file
  * that large through its API and it is therefore not in the repo.
  *
- * Everything here is loaded on first press and kept: the model is 63 MB and the
- * phonemiser's data is 18 MB, so a farmer who never presses Listen never pays
- * for either, and one who does pays once per session. A first press needs the
+ * Everything here is loaded once and kept: the model is 63 MB and the
+ * phonemiser's data is 18 MB. The load starts in the background when the home
+ * screen opens — a phone has no hover, so the pill's hover warm-up never fires
+ * there, and a first press would otherwise begin with the whole download on a
+ * slow connection. That costs a farmer who never presses Listen the download;
+ * it is the price of a pill that answers when he does press it, and the model
+ * is kept for the session once it arrives. A first press still needs the
  * network for the model; after that the voice is in memory, and a repeat press
  * costs nothing. The browser's own voice is the fallback when the model cannot
- * be reached — see `SpeechProvider`.
+ * be reached — see `SpeechProvider` — and only when it has a Saraiki or Urdu
+ * voice of its own; otherwise the press is answered with a message, never
+ * with an English voice reading Urdu script.
  *
  * There is no Saraiki voice to prefer here: Piper publishes no Saraiki model
  * (checked: no `skr` in the Piper voices release), so the Urdu voice reads
@@ -75,6 +81,17 @@ const PIPER_DATA = `${BASE}/piper_phonemize.data`;
  */
 const CHUNK_CHARS = 200;
 
+/**
+ * How much slower the voice reads than the model's own pace.
+ *
+ * The model at its own pace reads too fast for advice a farmer acts on in a
+ * field — a comfortable speed is a quarter slower. This scales the phoneme
+ * durations (`length_scale`), so every part is made slower, not just played
+ * slower; a part already made at the old pace is never replayed, because the
+ * cache is per session and a new build starts empty.
+ */
+const LENGTH_SCALE_SLOWDOWN = 1.25;
+
 type PiperVoice = {
   ort: typeof import('onnxruntime-web');
   session: import('onnxruntime-web').InferenceSession;
@@ -83,6 +100,38 @@ type PiperVoice = {
 };
 
 let voice: Promise<PiperVoice> | null = null;
+
+/**
+ * Whether the voice is arriving, ready, or not started.
+ *
+ * The model is 63 MB and there is no smaller Urdu model — Piper publishes no
+ * Urdu voice below medium, so the first press on a slow connection used to
+ * sit in silence while the download ran. The pill now shows that wait (see
+ * `SpeechProvider.voiceLoading`), which needs to know the load's state rather
+ * than just its promise. A failed load is not remembered, so the state returns
+ * to `idle` on failure and the next press tries again.
+ */
+export type VoiceLoadState = 'idle' | 'loading' | 'ready';
+
+let loadState: VoiceLoadState = 'idle';
+const loadStateListeners = new Set<(state: VoiceLoadState) => void>();
+
+export function getVoiceLoadState(): VoiceLoadState {
+  return loadState;
+}
+
+export function subscribeVoiceLoadState(listener: (state: VoiceLoadState) => void): () => void {
+  loadStateListeners.add(listener);
+  return () => {
+    loadStateListeners.delete(listener);
+  };
+}
+
+function setLoadState(state: VoiceLoadState): void {
+  if (loadState === state) return;
+  loadState = state;
+  for (const listener of loadStateListeners) listener(state);
+}
 
 /**
  * Brings the phonemiser in from this app's own origin.
@@ -122,6 +171,7 @@ function loadPhonemizer(): Promise<PhonemizerFactory> {
  */
 function load(): Promise<PiperVoice> {
   voice ??= (async () => {
+    setLoadState('loading');
     const [ort, factory, config] = await Promise.all([
       import('onnxruntime-web/wasm'),
       loadPhonemizer(),
@@ -226,6 +276,7 @@ function load(): Promise<PiperVoice> {
       return ids;
     };
 
+    setLoadState('ready');
     return { ort: runtime, session, config, phonemize };
   })()
     /*
@@ -239,6 +290,7 @@ function load(): Promise<PiperVoice> {
      * retry; remembering it costs the feature.
      */
     .catch((failure: unknown) => {
+      setLoadState('idle');
       voice = null;
       throw failure;
     });
@@ -375,7 +427,7 @@ async function makePart(loaded: PiperVoice, words: string): Promise<Blob> {
       'float32',
       Float32Array.from([
         config.inference.noise_scale,
-        config.inference.length_scale,
+        config.inference.length_scale * LENGTH_SCALE_SLOWDOWN,
         config.inference.noise_w,
       ]),
     ),
@@ -404,19 +456,27 @@ async function makePart(loaded: PiperVoice, words: string): Promise<Blob> {
  * starts while the rest of the passage is still being made. This is the
  * difference between a pill that answers and a pill that sits there — see
  * `splitForVoice` — and a sentence already in `madeParts` arrives with no model
- * work at all.
+ * work at all. `onPart` is also given the sentence's absolute index, so the
+ * caller knows which part is playing.
+ *
+ * `fromPart` resumes a reading that was stopped: parts before it are not made
+ * and not handed over, so a press after Stop continues from the sentence it
+ * was on instead of starting again from the beginning.
  */
 export async function synthesiseUrduSpeech(
   text: string,
-  onPart: (audio: Blob) => void,
+  onPart: (audio: Blob, index: number) => void,
+  fromPart = 0,
 ): Promise<boolean> {
   try {
     const loaded = await load();
     const parts = splitForVoice(text);
     if (parts.length === 0) return false;
 
-    for (const part of parts) {
-      onPart(await partFor(loaded, part));
+    for (let index = fromPart; index < parts.length; index += 1) {
+      const part = parts[index];
+      if (part === undefined) continue;
+      onPart(await partFor(loaded, part), index);
     }
 
     return true;
@@ -438,7 +498,7 @@ export async function synthesiseUrduSpeech(
  * Two things are done here, and both exist because the model cannot be swapped
  * for a faster one — Piper publishes no Urdu voice smaller than the 60.6 MB
  * medium (checked: `aegis_female` and `fasih` are the only two, both medium, both
- * 60.6 MB):
+ * 60.6 MB; there is no low or x_low model to switch to):
  *
  * · the 63 MB model and 18 MB phonemiser start arriving (the press would
  *   otherwise begin with that download);
@@ -446,9 +506,10 @@ export async function synthesiseUrduSpeech(
  *   sound instead of waiting for the model to run. This is the one that answers
  *   a press in a few hundred milliseconds rather than a few seconds.
  *
- * Called from the `Listen` pill's hover and focus (`SpeechProvider.warm`): a
- * finger rests there and a keyboard lands there before either presses it. Nothing
- * is said — `onPart` is not called and no audio is played.
+ * Called when the home screen opens (`SpeechProvider.preloadVoice`) and from
+ * the `Listen` pill's hover and focus (`SpeechProvider.warm`): a finger rests
+ * there and a keyboard lands there before either presses it. Nothing is said —
+ * `onPart` is not called and no audio is played.
  *
  * A failure is deliberately silent: nothing was asked for yet, and the press that
  * follows reports the cause itself. It is also not remembered — in `load`, a

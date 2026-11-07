@@ -20,7 +20,7 @@
  * · the Listen pill reads the rates aloud in Urdu, in short plain words.
  */
 
-import { Volume2 } from 'lucide-react';
+import { Loader2, Volume2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { SectionLabel } from '@/components/SectionLabel';
 import { useLocale } from '@/i18n/LocaleProvider';
@@ -83,6 +83,9 @@ export function MandiRatesCard() {
   const marketName =
     live[0]?.marketName || location.placeLabel || t('market.wazirabad');
   const listening = speech.speaking === 'mandi';
+  /* The pill shows a spinner while the voice is still arriving, not a
+     Listen that sits silent — a press joins the download already running. */
+  const voiceLoading = speech.voiceLoading && !listening;
 
   /*
    * The Urdu sentence the Listen pill reads: the live prices, then the
@@ -132,11 +135,25 @@ export function MandiRatesCard() {
                     toast.error(t('weather.listenUnavailable'));
                   });
               }}
-              aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
+              aria-label={
+                listening
+                  ? t('weather.stopListening')
+                  : voiceLoading
+                    ? t('weather.listenLoading')
+                    : t('weather.listen')
+              }
               className="flex items-center gap-1 text-label text-brand"
             >
-              <Volume2 className="size-4" aria-hidden />
-              {listening ? t('weather.stopListening') : t('weather.listen')}
+              {voiceLoading ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Volume2 className="size-4" aria-hidden />
+              )}
+              {listening
+                ? t('weather.stopListening')
+                : voiceLoading
+                  ? t('weather.listenLoading')
+                  : t('weather.listen')}
             </button>
           ) : null
         }
