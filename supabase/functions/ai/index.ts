@@ -11,6 +11,10 @@
  *     app is not allowed to say — and the knowledge version cited in an answer
  *     cannot differ from the one the server actually used.
  *
+ *   Live data: a rates or weather question is answered from `market_rates()` /
+ *   `latest_weather()` rows fetched here, never from memory; the rows are cited
+ *   with source and observed date.
+ *
  * Routes, after the function name:
  *
  *   POST /ai/ask       { question, context }        → AiAnswer
@@ -54,6 +58,9 @@ type AiContext = {
   cropStage?: string;
   district?: string;
   language: string;
+  /** Optional location for `latest_weather()`; absent when the client sent none. */
+  lat?: number;
+  lon?: number;
   weatherUsable?: boolean;
   signalSubjects?: string[];
 };
@@ -119,13 +126,159 @@ function looksOffDomain(question: string): boolean {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Live data: mandi rates and weather                                         */
+/* -------------------------------------------------------------------------- */
+
+const MARKET_TERMS = [
+  'mandi', 'market', 'price', 'rate', 'bhao', 'bhaav', 'منڈی', 'قیمت', 'بھاؤ',
+];
+
+const WEATHER_TERMS = [
+  'weather', 'rain', 'temperature', 'forecast', 'mosam', 'موسم', 'بارش',
+];
+
+/** Question words (English and Urdu) mapped to `market_commodities.code`. */
+const COMMODITY_WORDS: Array<[string, string]> = [
+  ['wheat', 'wheat'], ['گندم', 'wheat'],
+  ['cotton', 'cotton'], ['کپاس', 'cotton'],
+  ['rice', 'rice'], ['چاول', 'rice'],
+  ['maize', 'maize'], ['corn', 'maize'], ['مکئی', 'maize'],
+  ['sugarcane', 'sugarcane'], ['گنا', 'sugarcane'],
+  ['potato', 'potato'], ['آلو', 'potato'],
+  ['onion', 'onion'], ['پیاز', 'onion'],
+  ['gram', 'gram'], ['چنا', 'gram'],
+];
+
+function asksAbout(question: string, terms: string[]): boolean {
+  const lower = question.toLowerCase();
+  return terms.some((term) => lower.includes(term));
+}
+
+function commodityIn(question: string): string | null {
+  const lower = question.toLowerCase();
+  const found = COMMODITY_WORDS.find(([word]) => lower.includes(word));
+  return found ? found[1] : null;
+}
+
+type MarketRateRow = {
+  commodity_code: string;
+  commodity_name_en: string;
+  market_name: string;
+  observed_on: string;
+  age_hours: number | null;
+  min_price: number | null;
+  max_price: number | null;
+  modal_price: number | null;
+  currency: string;
+  source_code: string;
+  source_name: string;
+  is_recent: boolean;
+};
+
+type WeatherRow = {
+  provider_code: string;
+  provider_name: string;
+  attribution: string | null;
+  observed_at: string;
+  age_minutes: number | null;
+  freshness: string;
+  is_usable: boolean;
+  temp_c: number | null;
+  humidity_pct: number | null;
+  precip_mm: number | null;
+  wind_kph: number | null;
+  condition_text: string | null;
+};
+
+/**
+ * Latest rate per market from `market_rates()`. `is_recent` is reported, never
+ * filtered: a stale rate is shown as stale, not silently dropped or refreshed
+ * with a guess. A missing price stays "not reported", never zero.
+ */
+async function fetchMarketRates(
+  client: ReturnType<typeof adminClient>,
+  commodity: string | null,
+): Promise<MarketRateRow[]> {
+  const { data, error } = await client.rpc('market_rates', { p_commodity: commodity });
+  if (error || !Array.isArray(data)) return [];
+  return (data as Array<Record<string, unknown>>)
+    .filter((row) => typeof row.commodity_code === 'string' && typeof row.market_name === 'string')
+    .slice(0, 8) as unknown as MarketRateRow[];
+}
+
+/** Latest reading from `latest_weather()`; null when no reading exists. */
+async function fetchWeather(
+  client: ReturnType<typeof adminClient>,
+  lat: number,
+  lon: number,
+): Promise<WeatherRow | null> {
+  const { data, error } = await client.rpc('latest_weather', { p_lat: lat, p_lon: lon });
+  if (error || !Array.isArray(data)) return null;
+  const row = (data as Array<Record<string, unknown>>)[0];
+  if (!row || typeof row.observed_at !== 'string') return null;
+  return row as unknown as WeatherRow;
+}
+
+function priceText(row: MarketRateRow): string {
+  if (row.modal_price !== null && row.modal_price !== undefined) return `${row.modal_price}`;
+  if (row.min_price !== null && row.min_price !== undefined && row.max_price !== null && row.max_price !== undefined) {
+    return `${row.min_price}–${row.max_price}`;
+  }
+  return 'not reported';
+}
+
+/** The live rows, rendered for the model with source and observed date. */
+function liveDataBlock(rates: MarketRateRow[], weather: WeatherRow | null): string {
+  const lines: string[] = [];
+  for (const row of rates) {
+    lines.push(
+      `- ${row.commodity_name_en} — ${row.market_name}: ${priceText(row)} ${row.currency} per 40kg, ` +
+        `observed ${row.observed_on} (${row.age_hours ?? '?'}h ago), source ${row.source_name} (${row.source_code}), ` +
+        `recent: ${row.is_recent ? 'yes' : 'no'}.`,
+    );
+  }
+  if (weather) {
+    if (weather.is_usable) {
+      lines.push(
+        `- Weather (${weather.provider_name}): ${weather.temp_c ?? 'not reported'}°C, ` +
+          `humidity ${weather.humidity_pct ?? 'not reported'}%, rain ${weather.precip_mm ?? 'not reported'}mm, ` +
+          `wind ${weather.wind_kph ?? 'not reported'} kph, ${weather.condition_text ?? ''}; ` +
+          `observed ${weather.observed_at} (${weather.age_minutes ?? '?'} min ago), freshness ${weather.freshness}.`,
+      );
+    } else {
+      lines.push(
+        `- Weather reading is NOT usable (freshness: ${weather.freshness}, observed ${weather.observed_at}). ` +
+          `Do not give weather-dependent advice.`,
+      );
+    }
+  }
+  return lines.join('
+');
+}
+
+/** Confidence for an answer grounded only in live data, not knowledge. */
+function liveConfidence(rates: MarketRateRow[], weather: WeatherRow | null): number {
+  if (rates.length > 0) return rates.some((row) => row.is_recent) ? 80 : 60;
+  if (weather && weather.is_usable) return 80;
+  return 0;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Grounding                                                                  */
 /* -------------------------------------------------------------------------- */
 
-function caveatsFor(hits: KnowledgeHit[], context: AiContext, mode: 'keyword' | 'semantic'): string[] {
+function caveatsFor(
+  hits: KnowledgeHit[],
+  context: AiContext,
+  mode: 'keyword' | 'semantic',
+  rates: MarketRateRow[] = [],
+): string[] {
   const caveats: string[] = [];
   if (mode === 'keyword') {
     caveats.push('Answers are drawn from a keyword index over published entries.');
+  }
+  if (rates.some((row) => !row.is_recent)) {
+    caveats.push('Some cited rates are not recent; the observed date is shown, treat them as the last reported rate, not today\'s.');
   }
   if (!context.cropCode) {
     caveats.push('No crop was confirmed, so the answer is not crop-specific.');
@@ -140,7 +293,12 @@ function caveatsFor(hits: KnowledgeHit[], context: AiContext, mode: 'keyword' | 
   return caveats;
 }
 
-function citationsFor(hits: KnowledgeHit[], context: AiContext): Citation[] {
+function citationsFor(
+  hits: KnowledgeHit[],
+  context: AiContext,
+  rates: MarketRateRow[] = [],
+  weather: WeatherRow | null = null,
+): Citation[] {
   const citations: Citation[] = hits.map((hit) => ({
     kind: 'knowledge' as const,
     label: hit.topic || hit.slug,
@@ -150,6 +308,18 @@ function citationsFor(hits: KnowledgeHit[], context: AiContext): Citation[] {
     citations.push({
       kind: 'crop_fact',
       label: [context.cropCode, context.cropStage].filter(Boolean).join(', '),
+    });
+  }
+  for (const row of rates) {
+    citations.push({
+      kind: 'market',
+      label: `${row.commodity_name_en} — ${row.market_name}, observed ${row.observed_on} (${row.source_name})`,
+    });
+  }
+  if (weather && weather.is_usable) {
+    citations.push({
+      kind: 'weather',
+      label: `${weather.provider_name}, observed ${weather.observed_at} (${weather.freshness})`,
     });
   }
   return citations;
@@ -171,7 +341,7 @@ function confidenceFor(hits: KnowledgeHit[], context: AiContext): number {
   return Math.round(Math.min(92, 55 + Math.min(best.score, 1) * 35 + cropBonus));
 }
 
-function systemPrompt(context: AiContext, hits: KnowledgeHit[]): string {
+function systemPrompt(context: AiContext, hits: KnowledgeHit[], live = ''): string {
   const language = context.language === 'ur' ? 'Urdu' : 'English';
   const knowledge = hits
     .map((hit, index) => `[${index + 1}] ${hit.title} (v${hit.version}, ${hit.provenance})\n${hit.body}`)
@@ -183,8 +353,11 @@ function systemPrompt(context: AiContext, hits: KnowledgeHit[]): string {
     '',
     'Hard rules:',
     '· Use ONLY the numbered knowledge entries below. Do not add facts from memory.',
-    '· If the entries do not answer the question, say so plainly and stop.',
+    '· For prices and weather, use ONLY the live data below. Never quote a rate or a reading from memory.',
+    '· If the entries and live data do not answer the question, say so plainly and stop.',
     '· Cite the entries you used by their bracketed number, e.g. [1].',
+    '· Cite every rate and weather reading with its source and observed date.',
+    '· If a rate is marked not recent, say it is the last reported rate, not today\'s.',
     '· Never name a pesticide dose, brand or product that is not in an entry.',
     '· Do not mention weather unless a reading is provided and marked usable.',
     '',
@@ -194,6 +367,9 @@ function systemPrompt(context: AiContext, hits: KnowledgeHit[]): string {
     '',
     'Knowledge entries:',
     knowledge || '(none retrieved)',
+    '',
+    'Live data (mandi rates / weather, fetched for this question):',
+    live || '(none fetched — no rates or weather question was asked, or no reading exists)',
   ].join('\n');
 }
 
@@ -211,10 +387,24 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
   // The domain gate runs before retrieval, but only refuses outright when
   // nothing agricultural is present and no published entry matches.
   const client = adminClient();
-  const { hits, mode } = await retrieveKnowledge(client, question, {
-    cropCode: context.cropCode ?? null,
-    limit: 4,
-  });
+  const wantsMarket = asksAbout(question, MARKET_TERMS);
+  const wantsWeather = asksAbout(question, WEATHER_TERMS);
+  const hasLocation = typeof context.lat === 'number' && typeof context.lon === 'number';
+  const [{ hits, mode }, rates, weather] = await Promise.all([
+    retrieveKnowledge(client, question, {
+      cropCode: context.cropCode ?? null,
+      limit: 4,
+    }),
+    wantsMarket
+      ? fetchMarketRates(client, commodityIn(question))
+      : Promise.resolve([] as MarketRateRow[]),
+    wantsWeather && hasLocation
+      ? fetchWeather(client, context.lat as number, context.lon as number)
+      : Promise.resolve(null as WeatherRow | null),
+  ]);
+  // A fetched reading overrides the client's freshness flag: the server's own
+  // read is what the answer may cite.
+  if (weather) context.weatherUsable = weather.is_usable;
 
   if (looksOffDomain(question) && hits.length === 0) {
     const refusal: AiAnswer = {
@@ -228,7 +418,10 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
     return json(refusal);
   }
 
-  if (hits.length === 0) {
+  // Live rows ground an answer on their own: a rates question needs no
+  // knowledge entry. Weather only grounds when the reading is usable.
+  const groundedByLive = rates.length > 0 || (weather !== null && weather.is_usable);
+  if (hits.length === 0 && !groundedByLive) {
     const uncovered: AiAnswer = {
       gate: 'not_covered',
       confidence: 20,
@@ -237,6 +430,12 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
       escalate: true,
       caveats: [
         'No published knowledge entry matched this question.',
+        ...(wantsWeather && !hasLocation
+          ? ['No location was sent with the question, so no weather reading could be fetched.']
+          : []),
+        ...(weather && !weather.is_usable
+          ? ['The latest weather reading is not usable, so no weather answer could be given.']
+          : []),
         'Nothing was invented to fill the gap — a person can answer it.',
       ],
     };
@@ -251,7 +450,7 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
   }
 
   const reply = await complete([
-    { role: 'system', content: systemPrompt(context, hits) },
+    { role: 'system', content: systemPrompt(context, hits, liveDataBlock(rates, weather)) },
     { role: 'user', content: question },
   ], { maxTokens: 600 });
 
@@ -259,14 +458,14 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
     return fail(`The model could not answer: ${reply.detail}`, 502);
   }
 
-  const confidence = confidenceFor(hits, context);
+  const confidence = hits.length > 0 ? confidenceFor(hits, context) : liveConfidence(rates, weather);
   const answer: AiAnswer = {
     gate: 'agriculture',
     confidence,
     text: reply.text,
-    citations: citationsFor(hits, context),
+    citations: citationsFor(hits, context, rates, weather),
     escalate: confidence < CONFIDENCE_THRESHOLD,
-    caveats: caveatsFor(hits, context, mode),
+    caveats: caveatsFor(hits, context, mode, rates),
   };
   return json(answer);
 }
@@ -448,3 +647,4 @@ Deno.serve(async (req) => {
     return fail(detail, 500);
   }
 });
+
