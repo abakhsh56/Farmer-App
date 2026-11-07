@@ -24,6 +24,7 @@ import { LocationSearchScreen } from '@/screens/LocationSearchScreen';
 import { SearchScreen } from '@/screens/SearchScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { ScanScreen } from '@/screens/ScanScreen';
+import { WeatherScreen } from '@/screens/WeatherScreen';
 
 /**
  * Two levels of navigation: the tab bar, and one pushed screen on top of it.
@@ -33,7 +34,7 @@ import { ScanScreen } from '@/screens/ScanScreen';
  * from the home header and pushes over the tabs, which is also why the bar is
  * hidden while it is open.
  */
-type View = 'tabs' | 'profile' | 'locationSearch' | 'search';
+type View = 'tabs' | 'profile' | 'locationSearch' | 'search' | 'weather';
 
 /**
  * The whole app.
@@ -197,10 +198,15 @@ function Shell() {
           />
         ) : null}
 
+        {/* The Home weather card at full size. A pushed screen, like Profile, so
+            the tab bar is out of the way while the sky has the room. */}
+        {view === 'weather' ? <WeatherScreen onBack={() => setView('tabs')} /> : null}
+
         {view === 'tabs' && tab === 'home' ? (
           <HomeScreen
             onScan={() => setTab('scan')}
             onOpenProfile={() => setView('profile')}
+            onOpenWeather={() => setView('weather')}
             onOpenLocationSearch={() => {
               setLocationReturn('tabs');
               setView('locationSearch');
