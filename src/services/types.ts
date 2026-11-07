@@ -66,6 +66,13 @@ export type WeatherNow = {
    * is not half English in Urdu. Same shape as the market feed's commodity names.
    */
   conditionKey?: MessageKey;
+  /**
+   * The WMO weather code for the current condition, when the provider reports
+   * one. The spray decision reads it (thunderstorm and heavy rain are
+   * do-not-spray codes in the server's alert_rules); a provider whose source
+   * carries no code leaves it unset rather than inventing one.
+   */
+  weatherCode?: number | null;
 };
 
 export type WeatherDay = {
@@ -76,11 +83,34 @@ export type WeatherDay = {
   conditionText: string | null;
 };
 
+/**
+ * One hour of forecast: the numbers a spray decision is made from.
+ *
+ * A spray window is a run of hours, not a single reading, so the daily
+ * forecast cannot carry it — a day's max temperature says nothing about
+ * whether 7 AM is calm. The hourly forecast is the only source that can.
+ */
+export type WeatherHour = {
+  /** Epoch ms (UTC) for the start of the hour. */
+  timeMs: number;
+  tempC: number | null;
+  humidityPct: number | null;
+  windKph: number | null;
+  /** Chance of precipitation in this hour, 0–100. Null when the source is silent. */
+  precipProbPct: number | null;
+  precipMm: number | null;
+  /** WMO weather code for this hour, when the source reports one. */
+  weatherCode: number | null;
+  conditionText: string | null;
+};
+
 export interface WeatherProvider {
   readonly name: string;
   /** Current conditions. Never throws: a failure is reported inside the result. */
   current(point: GeoPoint): Promise<Sourced<WeatherNow>>;
   forecast(point: GeoPoint, days: number): Promise<Sourced<WeatherDay[]>>;
+  /** Hourly forecast for the next `hours` hours. Never throws: a failure is reported inside the result. */
+  hourly(point: GeoPoint, hours: number): Promise<Sourced<WeatherHour[]>>;
 }
 
 /**

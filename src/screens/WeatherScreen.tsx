@@ -12,11 +12,13 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLocale } from '@/i18n/LocaleProvider';
-import { formatRelativeTime, formatWeekdayDate, intlLocale } from '@/i18n/format';
+import { formatHour, formatRelativeTime, formatWeekdayDate, intlLocale } from '@/i18n/format';
+import { useInsights } from '@/insights/InsightProvider';
 import { useLocation } from '@/location/LocationProvider';
-import { useForecast, useWeather } from '@/services/hooks';
+import { useForecast, useHourly, useWeather } from '@/services/hooks';
+import { computeSprayAdvice, sprayAdviceLines } from '@/services/spray';
+import { isWeatherStale, isWeatherUsable, type WeatherDay } from '@/services/types';
 import { daylightProgress, sunTimes, type SunTimes } from '@/services/sun';
-import type { WeatherDay } from '@/services/types';
 
 /**
  * The sky over the farmer's own place, at full size.
@@ -131,6 +133,35 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
 
   const reading = weather.sourced;
   const now = Date.now();
+  const weatherUsable = reading !== null && isWeatherUsable(reading);
+  const readingStale = reading !== null && isWeatherStale(reading);
+
+  /*
+   * The spray window, computed from the live hourly forecast — the same
+   * advice the Home card prints, from the same numbers, so a farmer moving
+   * between the two surfaces never reads two different windows for the same
+   * morning. A thunderstorm or heavy rain outranks the window (do not spray);
+   * with no crop, no live data, or no suitable run, the line says so plainly
+   * instead of inventing a time.
+   */
+  const hourly = useHourly(location.activePoint, 24);
+  const insights = useInsights();
+  const sprayAdvice = computeSprayAdvice({
+    now: reading,
+    hourly: hourly.sourced,
+    hasCrop: insights.primary !== undefined,
+    nowMs: now,
+  });
+  const sprayStartHour =
+    sprayAdvice.windowStartMs !== null ? new Date(sprayAdvice.windowStartMs).getHours() : null;
+  const sprayEndHour =
+    sprayAdvice.windowEndMs !== null ? new Date(sprayAdvice.windowEndMs).getHours() : null;
+  const sprayLines = sprayAdviceLines(
+    t,
+    sprayAdvice,
+    sprayStartHour !== null ? formatHour(sprayStartHour, t) : '',
+    sprayEndHour !== null ? formatHour(sprayEndHour, t) : '',
+  );
   const times = sunTimes(new Date(now), location.activePoint);
   const animatedTemp = useCountUp(reading?.data.tempC ?? null);
 
@@ -260,13 +291,31 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
       ) : null}
 
       {/*
-        The same two sentences the Home card carries, kept in one place here rather
-        than re-worded: a farmer moving between the two surfaces must not read two
-        different spray windows for the same morning.
+        The same two sentences the Home card carries, from the same computed
+        advice rather than re-worded: a farmer moving between the two surfaces
+        must not read two different spray windows for the same morning. When
+        the reading cannot carry advice, the section says so the way the Home
+        card does — a reading too old to spray on is not a service that
+        answered nothing.
       */}
       <section className="mt-8 rounded-lg border border-foreground/10 bg-white/40 p-4 dark:bg-white/10">
-        <p className="text-body font-medium">{t('weather.spray')}</p>
-        <p className="mt-1 text-body-sm text-foreground/70">{t('weather.rain')}</p>
+        {weatherUsable ? (
+          <>
+            <p className="text-body font-medium">{sprayLines.title}</p>
+            <p className="mt-1 text-body-sm text-foreground/70">{sprayLines.body}</p>
+          </>
+        ) : (
+          <>
+            <p className="text-body font-medium">
+              {readingStale ? t('weather.stale.title') : t('weather.unavailable.title')}
+            </p>
+            <p className="mt-1 text-body-sm text-foreground/70">
+              {readingStale && reading
+                ? t('weather.stale', { age: formatRelativeTime(reading.observedAt, now, t) })
+                : t('weather.unavailable.body')}
+            </p>
+          </>
+        )}
       </section>
 
       {reading ? (

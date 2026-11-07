@@ -22,10 +22,8 @@ export type WeatherReading = {
   tempC: number;
   humidity: number;
   windKey: MessageKey;
-  /* The interpretation layer: provider facts above, farming advice down here. */
-  sprayKey: MessageKey;
-  sprayOtherKey: MessageKey;
-  rainKey: MessageKey;
+  /* Spray advice is not a field here: it is computed from the live hourly
+     forecast (services/spray), never carried as a fixed key on a reading. */
 };
 
 export type Freshness = 'fresh' | 'stale' | 'expired';
@@ -49,8 +47,5 @@ export function createReading(now: number): WeatherReading {
     tempC: 34,
     humidity: 58,
     windKey: 'weather.wind',
-    sprayKey: 'weather.spray',
-    sprayOtherKey: 'weather.sprayOther',
-    rainKey: 'weather.rain',
   };
 }

@@ -40,6 +40,7 @@ import type {
   ProductSearchQuery,
   Sourced,
   WeatherDay,
+  WeatherHour,
   WeatherNow,
 } from './types';
 
@@ -149,6 +150,22 @@ export function useForecast(
     `forecast:${point.lat.toFixed(3)},${point.lon.toFixed(3)}:${days}`,
     EMPTY as unknown as WeatherDay[],
     (services) => services.weather.forecast(point, days),
+  );
+}
+
+/**
+ * Hourly forecast for the next `hours` hours. The spray decision reads this,
+ * not the daily forecast — a window is a run of hours, and only the hourly
+ * numbers can say which ones are calm, cool and dry.
+ */
+export function useHourly(
+  point: GeoPoint = PROFILE_POINT,
+  hours = 24,
+): Resource<WeatherHour[]> {
+  return useResource<WeatherHour[]>(
+    `hourly:${point.lat.toFixed(3)},${point.lon.toFixed(3)}:${hours}`,
+    EMPTY as unknown as WeatherHour[],
+    (services) => services.weather.hourly(point, hours),
   );
 }
 

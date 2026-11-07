@@ -15,6 +15,7 @@ import { useCredit } from '@/credit/CreditProvider';
 import { shopsHoldingCredit } from '@/credit/store';
 import { useLocale } from '@/i18n/LocaleProvider';
 import {
+  formatHour,
   formatMoney,
   formatRelativeTime,
   formatWeekdayDate,
@@ -24,7 +25,8 @@ import { initialsOf } from '@/lib/initials';
 import { useCommunity } from '@/community/CommunityProvider';
 import { ME, PLACES, type TopicId } from '@/data/community';
 import { useInsights } from '@/insights/InsightProvider';
-import { useWeather } from '@/services/hooks';
+import { useHourly, useWeather } from '@/services/hooks';
+import { computeSprayAdvice, sprayAdviceLines } from '@/services/spray';
 import { isWeatherStale, isWeatherUsable } from '@/services/types';
 import { useSession } from '@/session/SessionProvider';
 import { useSpeech } from '@/speech/SpeechProvider';
@@ -98,12 +100,74 @@ export function HomeScreen({
   const reading = weather.sourced;
   const weatherUsable = reading !== null && isWeatherUsable(reading);
   /*
+   * The hourly forecast the spray window is computed from. It is a separate
+   * read from the current conditions, because a window is a run of hours and
+   * the current reading cannot say which hours are calm.
+   */
+  const hourly = useHourly(location.activePoint, 24);
+  /*
    * Advice pauses for two reasons and they must not read the same: a reading too
    * old to spray on ("out of date") is not a service that answered nothing
    * ("not available"). A failed call also returns a reading, with no numbers in
    * it, so only freshness separates the two.
    */
   const readingStale = reading !== null && isWeatherStale(reading);
+
+  /*
+   * What is happening around the farmer's crop, built from the two places this
+   * app already learns it: advice the system raised for this crop (the canonical
+   * insight list — the same record the notification bell references, never a
+   * second wording), and reports neighbours filed about pests or the same crop.
+   *
+   * Both sides are scoped rather than sampled: advice only for crops the farmer
+   * has added, reports only from the feed they can already see, newest first and
+   * a handful at most. Every row carries where it came from and how old it is —
+   * an alert with no provenance is a rumour with a nice font.
+   *
+   * The crop is read here, before the spoken advice, because the spray window
+   * is only advice for a farmer who has one: the window is computed from the
+   * live hourly forecast and the crop, and the voice must say the same window
+   * the card prints.
+   */
+  const insights = useInsights();
+  const community = useCommunity();
+  const crop = insights.primary;
+  const cropTopic = crop ? (crop.nameKey.replace('crop.', '') as TopicId) : null;
+
+  /*
+   * The spray window, computed from the live hourly forecast — never a fixed
+   * clock. The alert model is the server's (alert_rules): a thunderstorm or
+   * heavy rain outranks the window (priority 1 and 5), the window itself is
+   * an info alert at priority 10. When there is no crop, no live data, or no
+   * suitable run, the advice says so plainly instead of inventing a time.
+   */
+  const sprayAdvice = computeSprayAdvice({
+    now: reading,
+    hourly: hourly.sourced,
+    hasCrop: crop !== undefined,
+    nowMs: now,
+  });
+  const sprayStartHour =
+    sprayAdvice.windowStartMs !== null ? new Date(sprayAdvice.windowStartMs).getHours() : null;
+  const sprayEndHour =
+    sprayAdvice.windowEndMs !== null ? new Date(sprayAdvice.windowEndMs).getHours() : null;
+  const sprayLines = sprayAdviceLines(
+    t,
+    sprayAdvice,
+    sprayStartHour !== null ? formatHour(sprayStartHour, t) : '',
+    sprayEndHour !== null ? formatHour(sprayEndHour, t) : '',
+  );
+  /* The same two lines in Urdu, for the read-aloud voice. */
+  const sprayLinesUr = sprayAdviceLines(
+    (key, values) => tIn('ur', key, values),
+    sprayAdvice,
+    sprayStartHour !== null
+      ? formatHour(sprayStartHour, (key, values) => tIn('ur', key, values))
+      : '',
+    sprayEndHour !== null
+      ? formatHour(sprayEndHour, (key, values) => tIn('ur', key, values))
+      : '',
+  );
 
   /*
    * The words behind the Listen pill on the weather card — always in Urdu.
@@ -136,8 +200,8 @@ export function HomeScreen({
             : reading.data.windKph > 0
               ? tIn('ur', 'weather.windValue', { speed: Math.round(reading.data.windKph) })
               : tIn('ur', 'weather.wind'),
-          tIn('ur', 'weather.spray'),
-          tIn('ur', 'weather.rain'),
+          sprayLinesUr.title,
+          sprayLinesUr.body,
         ]
           .filter((part): part is string => Boolean(part))
           .join('. ')
@@ -150,22 +214,6 @@ export function HomeScreen({
    */
   const stopSpeech = speech.stop;
   useEffect(() => () => stopSpeech(), [stopSpeech]);
-
-  /*
-   * What is happening around the farmer's crop, built from the two places this
-   * app already learns it: advice the system raised for this crop (the canonical
-   * insight list — the same record the notification bell references, never a
-   * second wording), and reports neighbours filed about pests or the same crop.
-   *
-   * Both sides are scoped rather than sampled: advice only for crops the farmer
-   * has added, reports only from the feed they can already see, newest first and
-   * a handful at most. Every row carries where it came from and how old it is —
-   * an alert with no provenance is a rumour with a nice font.
-   */
-  const insights = useInsights();
-  const community = useCommunity();
-  const crop = insights.primary;
-  const cropTopic = crop ? (crop.nameKey.replace('crop.', '') as TopicId) : null;
 
   const adviceRows = crop
     ? insights
@@ -439,21 +487,23 @@ export function HomeScreen({
         {weatherUsable ? (
           <div className="mt-3.5 border-t border-white/20 pt-3.5">
             {/*
-              One advice line, in the language the app is set to.
-
-              The card used to print it twice — the same sentence in the other
-              script underneath, and before that a pair of keys that swapped with
-              the app's language and marked the English sentence as Urdu. By
-              request it now says it once: English in an English app, Urdu in an
-              Urdu one, and nothing in a script the farmer is not reading.
+              One advice line, in the language the app is set to — and computed,
+              not fixed. The window is the earliest run of calm, cool, dry hours
+              in the live hourly forecast for this place and this crop; a
+              thunderstorm or heavy rain outranks it (do not spray), and when
+              there is no crop, no live data, or no suitable run, the line says
+              so plainly instead of inventing a time. The Weather screen prints
+              the same two lines from the same advice, so a farmer moving
+              between the two surfaces never reads two different windows for
+              the same morning.
 
               The regional catalogues fall through this correctly: Punjabi and
               Sindhi have no spray wording of their own yet, so they resolve to
               Urdu rather than to English (`resolveMessage`), which is the right
               order for a farmer in Punjab or Sindh.
             */}
-            <p className="text-lead">{t('weather.spray')}</p>
-            <p className="mt-1 text-body-sm leading-relaxed text-white/75">{t('weather.rain')}</p>
+            <p className="text-lead">{sprayLines.title}</p>
+            <p className="mt-1 text-body-sm leading-relaxed text-white/75">{sprayLines.body}</p>
           </div>
         ) : (
           /*

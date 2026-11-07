@@ -27,6 +27,7 @@ import type {
   GeoPoint,
   Sourced,
   WeatherDay,
+  WeatherHour,
   WeatherNow,
   WeatherProvider,
 } from '../types';
@@ -132,6 +133,21 @@ const DAILY_FIELDS = [
   'weather_code',
 ].join(',');
 
+/**
+ * The fields a spray decision is made from, per hour: wind for drift, heat
+ * and humidity for evaporation, rain probability and code for wash-off and
+ * for the do-not-spray conditions. Requested as one hourly block so the
+ * window is computed from a single fetch, not stitched from two calls.
+ */
+const HOURLY_FIELDS = [
+  'temperature_2m',
+  'relative_humidity_2m',
+  'wind_speed_10m',
+  'precipitation_probability',
+  'precipitation',
+  'weather_code',
+].join(',');
+
 export function emptyWeatherNow(): WeatherNow {
   return {
     tempC: null,
@@ -213,6 +229,9 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
              locale without a key still shows a sentence rather than a code. */
           conditionText: condition?.text ?? null,
           conditionKey: condition?.key,
+          /* The code itself, so a spray decision can read the observed
+             condition rather than guessing it from the wording. */
+          weatherCode: code,
         },
         sourceLabel: this.name,
         observedAt,
@@ -258,6 +277,74 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
           minC: num(mins[index]),
           maxC: num(maxes[index]),
           precipMm: num(rain[index]),
+          conditionText: code === null ? null : (CONDITIONS[code]?.text ?? null),
+        });
+      }
+
+      return {
+        data: out,
+        sourceLabel: this.name,
+        observedAt: fetchedAt,
+        fetchedAt,
+        freshness: 'fresh',
+        status: 'live',
+      };
+    } catch (error) {
+      return {
+        data: [],
+        sourceLabel: this.name,
+        observedAt: fetchedAt,
+        fetchedAt,
+        freshness: 'unavailable',
+        status: 'failing',
+        error: error instanceof Error ? error.message : 'Open-Meteo could not be reached.',
+      };
+    }
+  }
+
+  /**
+   * Hourly forecast for the next `hours` hours, capped at 48.
+   *
+   * Open-Meteo's hourly block starts at 00:00 today, so hours before the
+   * current one are dropped and the run is capped at the number asked for —
+   * the spray decision only ever reads forward from now. Two forecast days
+   * are requested so a window that starts tomorrow morning is in the reply
+   * even when today has none.
+   */
+  async hourly(point: GeoPoint, hours: number): Promise<Sourced<WeatherHour[]>> {
+    const fetchedAt = this.now();
+    const wanted = Math.max(1, Math.min(Math.trunc(hours), 48));
+    try {
+      const body = await this.get(point, `hourly=${HOURLY_FIELDS}&forecast_days=2`);
+      const hourly = (body.hourly ?? {}) as Record<string, unknown>;
+      const times = Array.isArray(hourly.time) ? hourly.time : [];
+      const temps = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];
+      const hums = Array.isArray(hourly.relative_humidity_2m)
+        ? hourly.relative_humidity_2m
+        : [];
+      const winds = Array.isArray(hourly.wind_speed_10m) ? hourly.wind_speed_10m : [];
+      const probs = Array.isArray(hourly.precipitation_probability)
+        ? hourly.precipitation_probability
+        : [];
+      const precips = Array.isArray(hourly.precipitation) ? hourly.precipitation : [];
+      const codes = Array.isArray(hourly.weather_code) ? hourly.weather_code : [];
+
+      const out: WeatherHour[] = [];
+      for (let index = 0; index < times.length; index += 1) {
+        const stamp = parseStamp(times[index]);
+        if (stamp === null) continue;
+        /* The current hour is the first one that counts; earlier hours are past. */
+        if (stamp < fetchedAt - 60 * 60 * 1000) continue;
+        if (out.length >= wanted) break;
+        const code = num(codes[index]);
+        out.push({
+          timeMs: stamp,
+          tempC: num(temps[index]),
+          humidityPct: num(hums[index]),
+          windKph: num(winds[index]),
+          precipProbPct: num(probs[index]),
+          precipMm: num(precips[index]),
+          weatherCode: code,
           conditionText: code === null ? null : (CONDITIONS[code]?.text ?? null),
         });
       }

@@ -259,6 +259,52 @@ describe('Open-Meteo provider', () => {
     expect(new URL(seen[1] ?? '').searchParams.get('forecast_days')).toBe('16');
   });
 
+  it('maps the hourly forecast the spray window is computed from', async () => {
+    const base = Date.parse('2026-10-03T00:00:00Z');
+    const HOUR = 60 * 60 * 1000;
+    const times = Array.from({ length: 48 }, (_, i) =>
+      new Date(base + i * HOUR).toISOString().slice(0, 16),
+    );
+    const body = {
+      ...LIVE_PAYLOAD,
+      hourly: {
+        time: times,
+        temperature_2m: times.map((_, i) => 24 + (i % 12)),
+        relative_humidity_2m: times.map(() => 60),
+        wind_speed_10m: times.map(() => 8),
+        precipitation_probability: times.map(() => 0),
+        precipitation: times.map(() => 0),
+        weather_code: times.map(() => 0),
+      },
+    };
+    const { provider } = providerReturning(body);
+
+    const hourly = await provider.hourly(PROFILE, 6);
+    expect(hourly.status).toBe('live');
+    expect(hourly.data).toHaveLength(6);
+    /* The current hour is the first one: 12:00, not 00:00. */
+    expect(new Date(hourly.data[0]?.timeMs ?? 0).toISOString()).toBe('2026-10-03T12:00:00.000Z');
+    expect(hourly.data[0]).toMatchObject({
+      tempC: 24,
+      humidityPct: 60,
+      windKph: 8,
+      precipProbPct: 0,
+      precipMm: 0,
+      weatherCode: 0,
+      conditionText: 'Clear sky',
+    });
+
+    /* Asking for more than the vendor holds still caps at 48. */
+    const capped = await provider.hourly(PROFILE, 400);
+    expect(capped.data.length).toBeLessThanOrEqual(48);
+  });
+
+  it('reports the observed weather code on the current reading, so the spray decision can read it', async () => {
+    const { provider } = providerReturning(LIVE_PAYLOAD);
+    const reading = await provider.current(PROFILE);
+    expect(reading.data.weatherCode).toBe(0);
+  });
+
   it('is chosen by configuration, not by accident', () => {
     const base: ServiceConfig = {
       supabase: { url: null, anonKey: null, configured: false },

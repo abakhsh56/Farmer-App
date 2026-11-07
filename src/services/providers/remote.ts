@@ -47,6 +47,7 @@ import type {
   Sourced,
   StockistQuery,
   WeatherDay,
+  WeatherHour,
   WeatherNow,
   WeatherProvider,
 } from '../types';
@@ -199,6 +200,14 @@ export class SupabaseWeatherProvider implements WeatherProvider {
     // that ingestion is deployed, an empty forecast is reported honestly rather
     // than fabricated from the current reading.
     return failing([], this.name, 'Forecast ingestion is not deployed yet.');
+  }
+
+  async hourly(): Promise<Sourced<WeatherHour[]>> {
+    // Hourly rows are ingested into the same table with kind = 'hourly'. Until
+    // that ingestion is deployed, an empty hourly forecast is reported honestly
+    // rather than fabricated from the current reading — and the spray advice
+    // pauses instead of inventing a window.
+    return failing([], this.name, 'Hourly ingestion is not deployed yet.');
   }
 }
 

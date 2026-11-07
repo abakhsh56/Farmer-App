@@ -54,6 +54,7 @@ import type {
   Sourced,
   StockistQuery,
   WeatherDay,
+  WeatherHour,
   WeatherNow,
   WeatherProvider,
 } from '../types';
@@ -127,6 +128,7 @@ export class DevelopmentWeatherProvider implements WeatherProvider {
         windDir: 'SW',
         conditionText: 'Clear',
         conditionKey: 'weather.condition',
+        weatherCode: 0,
       },
       sourceLabel: this.name,
       observedAt: t - 12 * MINUTE,
@@ -149,6 +151,54 @@ export class DevelopmentWeatherProvider implements WeatherProvider {
         maxC: 35 + i,
         precipMm: i % 3 === 0 ? 0 : 1.4,
         conditionText: i % 3 === 0 ? 'Clear' : 'Light rain',
+      });
+    }
+
+    return {
+      data: out,
+      sourceLabel: this.name,
+      observedAt: t - 30 * MINUTE,
+      fetchedAt: t,
+      freshness: 'fresh',
+      status: 'development',
+    };
+  }
+
+  /**
+   * Hourly fixture with a real diurnal shape, so the spray window is
+   * computed in development rather than asserted: wind is calm and the air
+   * cool in the early morning, both build to midday, and ease by evening.
+   * The numbers are the fixture; the window is whatever they imply, and a
+   * fixture that changed them would move the window with it.
+   */
+  async hourly(_point: GeoPoint, hours: number): Promise<Sourced<WeatherHour[]>> {
+    const t = this.now();
+    const start = Math.floor(t / HOUR) * HOUR;
+    const wanted = Math.max(0, Math.min(hours, 48));
+    const out: WeatherHour[] = [];
+    for (let i = 0; i < wanted; i += 1) {
+      const at = start + i * HOUR;
+      const hour = new Date(at).getUTCHours();
+      const wind =
+        hour < 6 ? 5 + hour : hour < 10 ? 6 + (hour - 6) : hour < 15 ? 12 + (hour - 10) : hour < 19 ? 14 - (hour - 15) : 7;
+      const temp =
+        hour < 6
+          ? 22 + hour * 0.5
+          : hour < 14
+            ? 24 + (hour - 6) * 1.4
+            : hour < 19
+              ? 35 - (hour - 14) * 1.2
+              : 29 - (hour - 19) * 0.5;
+      const humidity = hour < 10 ? 62 - hour : hour < 15 ? 52 - (hour - 10) * 2 : 42 + (hour - 15);
+      out.push({
+        timeMs: at,
+        tempC: Math.round(temp * 10) / 10,
+        humidityPct: Math.round(humidity),
+        windKph: Math.round(wind * 10) / 10,
+        precipProbPct: 0,
+        precipMm: 0,
+        weatherCode: 0,
+        conditionText: 'Clear sky',
       });
     }
 
