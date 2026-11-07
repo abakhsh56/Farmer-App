@@ -77,6 +77,20 @@ function isOpenAt(hours: readonly [number, number], at: number): boolean {
 }
 
 /** Distance in km, haversine. Used for real geospatial behaviour locally. */
+/**
+ * Dew point from temperature and relative humidity, Magnus formula.
+ *
+ * The fixture needs a dew point because the spray window reads Delta T
+ * (air minus dew point). A missing dew point is not a pass, so the fixture
+ * computes a real one rather than leaving the field null.
+ */
+function dewPointC(tempC: number, humidityPct: number): number {
+  const a = 17.27;
+  const b = 237.7;
+  const alpha = (a * tempC) / (b + tempC) + Math.log(Math.max(1, humidityPct) / 100);
+  return (b * alpha) / (a - alpha);
+}
+
 function haversineKm(a: GeoPoint, b: GeoPoint): number {
   const R = 6371;
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -189,11 +203,18 @@ export class DevelopmentWeatherProvider implements WeatherProvider {
             : hour < 19
               ? 35 - (hour - 14) * 1.2
               : 29 - (hour - 19) * 0.5;
-      const humidity = hour < 10 ? 62 - hour : hour < 15 ? 52 - (hour - 10) * 2 : 42 + (hour - 15);
+      /*
+       * Morning air is humid enough that the dew-point spread stays inside
+       * the spray band (Delta T 2–8°C): with 62% the spread runs past 8°C and
+       * no morning window would ever compute, so the fixture keeps the
+       * morning near 70% and lets the afternoon dry out.
+       */
+      const humidity = hour < 10 ? 78 - hour : hour < 15 ? 52 - (hour - 10) * 2 : 42 + (hour - 15);
       out.push({
         timeMs: at,
         tempC: Math.round(temp * 10) / 10,
         humidityPct: Math.round(humidity),
+        dewPointC: Math.round(dewPointC(temp, humidity) * 10) / 10,
         windKph: Math.round(wind * 10) / 10,
         precipProbPct: 0,
         precipMm: 0,

@@ -15,6 +15,7 @@ import {
   stopSpeaking,
   warmAppVoice,
 } from '@/services/speech';
+import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
 
 /**
  * Who is talking, and whether this device can.
@@ -74,6 +75,9 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     supported ? window.speechSynthesis.getVoices() : [],
   );
   const [speaking, setSpeaking] = useState<string | null>(null);
+  /* Pressing read-aloud is the farmer saying he listens rather than reads —
+     the strongest voice-first signal there is. */
+  const capability = useCapabilityRecorder();
 
   useEffect(() => {
     if (!supported) return;
@@ -107,6 +111,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
 
   const speak = useCallback<SpeechValue['speak']>(
     ({ id, text, lang }) => {
+      /* He asked to hear it: record the preference before anything else. */
+      capability.recordEvent('readAloud');
       const onEnd = () => setSpeaking((current) => (current === id ? null : current));
       const voice = pickVoice(voices, lang);
 
@@ -138,7 +144,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
         });
       return true;
     },
-    [supported, voices],
+    [supported, voices, capability],
   );
 
   const value = useMemo<SpeechValue>(

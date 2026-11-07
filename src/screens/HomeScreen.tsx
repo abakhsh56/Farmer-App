@@ -25,8 +25,15 @@ import { initialsOf } from '@/lib/initials';
 import { useCommunity } from '@/community/CommunityProvider';
 import { ME, PLACES, type TopicId } from '@/data/community';
 import { useInsights } from '@/insights/InsightProvider';
-import { useHourly, useWeather } from '@/services/hooks';
-import { computeSprayAdvice, sprayAdviceLines } from '@/services/spray';
+import { useForecast, useHourly, useWeather } from '@/services/hooks';
+import {
+  computeCardAdvisory,
+  expertAnswerFromPosts,
+  pestReportsFromPosts,
+  type AdvisoryItem,
+} from '@/services/advisory';
+import { renderAdvisoryCopy } from '@/services/advisoryCopy';
+import { useCapability } from '@/capability/CapabilityProvider';
 import { isWeatherStale, isWeatherUsable } from '@/services/types';
 import { useSession } from '@/session/SessionProvider';
 import { useSpeech } from '@/speech/SpeechProvider';
@@ -105,6 +112,9 @@ export function HomeScreen({
    * the current reading cannot say which hours are calm.
    */
   const hourly = useHourly(location.activePoint, 24);
+  /* The daily forecast the irrigation and harvest items read: rain in the
+     next three days means skip watering, a dry window means harvest. */
+  const forecast = useForecast(location.activePoint, 7);
   /*
    * Advice pauses for two reasons and they must not read the same: a reading too
    * old to spray on ("out of date") is not a service that answered nothing
@@ -135,39 +145,94 @@ export function HomeScreen({
   const cropTopic = crop ? (crop.nameKey.replace('crop.', '') as TopicId) : null;
 
   /*
-   * The spray window, computed from the live hourly forecast — never a fixed
-   * clock. The alert model is the server's (alert_rules): a thunderstorm or
-   * heavy rain outranks the window (priority 1 and 5), the window itself is
-   * an info alert at priority 10. When there is no crop, no live data, or no
-   * suitable run, the advice says so plainly instead of inventing a time.
+   * The card's advice, computed from the farmer's live signals — ten
+   * signal-driven items in the PRD alert model's priority order, at most
+   * three, never a fixed line. The same function and the same input drive
+   * the Weather screen, so the two surfaces never print two versions of
+   * one morning.
+   *
+   * · spray window from the live hourly forecast and the crop, rain-free
+   *   warning from the rain probability, outbreak and pest threshold from
+   *   the community feed, stage and fertilizer from the knowledge base,
+   *   irrigation and harvest from the daily forecast, follow-up from the
+   *   farmer's own actions and the expert's answer.
+   * · a missing value stays missing and stale weather pauses the
+   *   weather items; the knowledge-backed ones stand on their own validity.
+   * · every item carries its source and its freshness, printed beside it.
    */
-  const sprayAdvice = computeSprayAdvice({
-    now: reading,
-    hourly: hourly.sourced,
-    hasCrop: crop !== undefined,
-    nowMs: now,
-  });
-  const sprayStartHour =
-    sprayAdvice.windowStartMs !== null ? new Date(sprayAdvice.windowStartMs).getHours() : null;
-  const sprayEndHour =
-    sprayAdvice.windowEndMs !== null ? new Date(sprayAdvice.windowEndMs).getHours() : null;
-  const sprayLines = sprayAdviceLines(
+  const capability = useCapability();
+  const advisory: AdvisoryItem[] = computeCardAdvisory(
+    {
+      now: reading,
+      hourly: hourly.sourced,
+      forecast: forecast.sourced,
+      crop: crop ?? null,
+      insights: crop ? insights.forCrop(crop.id) : [],
+      actedInsights: crop
+        ? insights.forCrop(crop.id).filter((entry) => entry.status === 'acted')
+        : [],
+      pestReports: pestReportsFromPosts(
+        community.posts,
+        (postId) => community.expertAnswered(postId),
+        ME,
+        (placeId) => {
+          const place = PLACES.find((entry) => entry.id === placeId);
+          return place ? t(place.labelKey) : t('location.none');
+        },
+      ),
+      expertAnswer: expertAnswerFromPosts(
+        community.posts,
+        (postId) => community.expertAnswered(postId),
+        ME,
+      ),
+      sources: {
+        weather: reading?.sourceLabel ?? t('advisory.source.openMeteo'),
+        community: t('advisory.source.community'),
+        communityExpert: t('advisory.source.communityExpert'),
+        knowledge: t('advisory.source.knowledge'),
+      },
+    },
+    now,
+  );
+  /* The words for each item, shaped to this farmer's capability — the same
+     advice, short and plain for one farmer, numbered and reasoned for
+     another. The listen text is always Urdu. */
+  const advisoryCopyCtx = {
     t,
-    sprayAdvice,
-    sprayStartHour !== null ? formatHour(sprayStartHour, t) : '',
-    sprayEndHour !== null ? formatHour(sprayEndHour, t) : '',
+    tUr: (key: Parameters<typeof t>[0], values?: Parameters<typeof t>[1]) =>
+      tIn('ur', key, values),
+    formatHour: (hour: number) => formatHour(hour, t),
+    formatHourUr: (hour: number) =>
+      formatHour(hour, (key, values) => tIn('ur', key, values)),
+  };
+  const advisoryCopies = advisory.map((item) =>
+    renderAdvisoryCopy(item, capability.level, advisoryCopyCtx),
   );
-  /* The same two lines in Urdu, for the read-aloud voice. */
-  const sprayLinesUr = sprayAdviceLines(
-    (key, values) => tIn('ur', key, values),
-    sprayAdvice,
-    sprayStartHour !== null
-      ? formatHour(sprayStartHour, (key, values) => tIn('ur', key, values))
-      : '',
-    sprayEndHour !== null
-      ? formatHour(sprayEndHour, (key, values) => tIn('ur', key, values))
-      : '',
-  );
+
+  /*
+   * Where a tap on an advisory row goes. An insight-backed row opens the
+   * insight; a community row opens the thread it came from; a weather row
+   * opens the Weather screen. A row with no destination is not a button.
+   */
+  const advisoryDestination = (item: AdvisoryItem): (() => void) | null => {
+    if (item.insightId !== undefined) return () => insights.open(item.insightId as string);
+    if (item.postId !== undefined) {
+      return () => {
+        community.openThread(item.postId as string);
+        onOpenCommunity();
+      };
+    }
+    if (
+      item.kind === 'spray' ||
+      item.kind === 'rainfree' ||
+      item.kind === 'irrigation' ||
+      item.kind === 'harvest' ||
+      item.kind === 'stress'
+    ) {
+      return onOpenWeather;
+    }
+    return null;
+  };
 
   /*
    * The words behind the Listen pill on the weather card — always in Urdu.
@@ -183,6 +248,12 @@ export function HomeScreen({
   const speech = useSpeech();
   const speechTag = LOCALE_REGISTRY.ur.tag;
   const listening = speech.speaking === 'weather';
+  /*
+   * The words behind the Listen pill — always in Urdu, and the advice part
+   * is the top advisory item's own listen text, so what is heard is the
+   * same advice the card prints, in the words this farmer reads.
+   */
+  const topListen = advisoryCopies[0]?.listenText ?? '';
   const spokenAdvice =
     reading && weatherUsable
       ? [
@@ -200,8 +271,7 @@ export function HomeScreen({
             : reading.data.windKph > 0
               ? tIn('ur', 'weather.windValue', { speed: Math.round(reading.data.windKph) })
               : tIn('ur', 'weather.wind'),
-          sprayLinesUr.title,
-          sprayLinesUr.body,
+          topListen || null,
         ]
           .filter((part): part is string => Boolean(part))
           .join('. ')
@@ -215,38 +285,12 @@ export function HomeScreen({
   const stopSpeech = speech.stop;
   useEffect(() => () => stopSpeech(), [stopSpeech]);
 
-  const adviceRows = crop
-    ? insights
-        .forCrop(crop.id)
-        .filter((entry) => entry.kind === 'pest' || entry.kind === 'activity')
-        .map((entry) => ({
-          id: entry.id,
-          icon: entry.kind === 'pest' ? AlertTriangle : Sprout,
-          /* A pest alert is the one row here that should catch the eye before it
-             is read — amber is the app's own attention colour, used the same way
-             on the credit card's unanswered request. */
-          tint:
-            entry.kind === 'pest'
-              ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/20 dark:text-amber-100'
-              : 'bg-brand-soft text-brand',
-          chip: entry.kind === 'pest' ? t('home.watch.alert') : null,
-          title: t(entry.titleKey),
-          meta: `${t(entry.sourceKey)} · ${formatRelativeTime(entry.createdAt, now, t)}`,
-          /*
-           * Urgency before source: a pest alert is worth more than a chore, a
-           * high-priority one more again — and age erodes both at ten points a
-           * day, so yesterday's alert does not outrank this morning's report
-           * forever. The weights live here rather than in the store because
-           * they are a *display* decision about this list, not a fact about the
-           * insight; the store's own ordering (priority, then newest) still
-           * stands everywhere else.
-           */
-          urgency:
-            (entry.kind === 'pest' ? 100 : 60) + (entry.priority === 'high' ? 20 : 0),
-          createdAt: entry.createdAt,
-          onClick: () => insights.open(entry.id),
-        }))
-    : [];
+  /*
+   * Insight advice is not listed here any more: it lives in the advisory
+   * list on the weather card, in the farmer's own words, and a second
+   * wording here would be a second version of the same recommendation.
+   * What stays is what the neighbours are saying, clustered by signal.
+   */
 
   /*
    * Derived intelligence, not echoed posts: relevant discussions are clustered
@@ -324,7 +368,7 @@ export function HomeScreen({
    * day, so a fresh neighbour report rises above week-old advice while a
    * high-priority alert stays where the farmer needs it.
    */
-  const watchRows = [...adviceRows, ...reportRows]
+  const watchRows = [...reportRows]
     .map((row) => ({
       ...row,
       score: row.urgency - Math.min(((now - row.createdAt) / DAY_MS) * 10, 40),
@@ -484,26 +528,57 @@ export function HomeScreen({
           </button>
         ) : null}
 
-        {weatherUsable ? (
+        {/*
+          The card's advice: up to three items, computed from this farmer's
+          live signals and worded for how much detail he wants. Each row
+          carries its source and its freshness — an alert with no provenance
+          is a rumour with a nice font — and a tap opens where it came from:
+          the insight, the community thread, or the Weather screen. When the
+          reading cannot carry weather advice, the list still shows what the
+          knowledge base raised, and a retry sits under it.
+        */}
+        {advisory.length > 0 ? (
           <div className="mt-3.5 border-t border-white/20 pt-3.5">
-            {/*
-              One advice line, in the language the app is set to — and computed,
-              not fixed. The window is the earliest run of calm, cool, dry hours
-              in the live hourly forecast for this place and this crop; a
-              thunderstorm or heavy rain outranks it (do not spray), and when
-              there is no crop, no live data, or no suitable run, the line says
-              so plainly instead of inventing a time. The Weather screen prints
-              the same two lines from the same advice, so a farmer moving
-              between the two surfaces never reads two different windows for
-              the same morning.
-
-              The regional catalogues fall through this correctly: Punjabi and
-              Sindhi have no spray wording of their own yet, so they resolve to
-              Urdu rather than to English (`resolveMessage`), which is the right
-              order for a farmer in Punjab or Sindh.
-            */}
-            <p className="text-lead">{sprayLines.title}</p>
-            <p className="mt-1 text-body-sm leading-relaxed text-white/75">{sprayLines.body}</p>
+            <ul className="flex flex-col gap-3">
+              {advisory.map((item, index) => {
+                const copy = advisoryCopies[index];
+                const go = advisoryDestination(item);
+                if (!copy) return null;
+                const row = (
+                  <>
+                    <p className="text-lead">{copy.title}</p>
+                    <p className="mt-1 text-body-sm leading-relaxed text-white/75">{copy.body}</p>
+                    <p className="mt-1 text-caption text-white/60">
+                      {item.source} · {formatRelativeTime(item.observedAt, now, t)}
+                    </p>
+                  </>
+                );
+                return (
+                  <li key={`${item.kind}-${index}`}>
+                    {go ? (
+                      <button
+                        type="button"
+                        onClick={go}
+                        className="w-full text-start motion-safe:transition-transform motion-safe:active:scale-[0.98]"
+                      >
+                        {row}
+                      </button>
+                    ) : (
+                      row
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {!weatherUsable ? (
+              <button
+                type="button"
+                onClick={weather.retry}
+                className="mt-3 rounded-full bg-white/12 px-4 py-2 text-label text-white"
+              >
+                {t('common.tryAgain')}
+              </button>
+            ) : null}
           </div>
         ) : (
           /*

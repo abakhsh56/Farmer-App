@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, useState, type ReactNode } from 're
 import type { ChatMessage } from '@/data/chat';
 import { ownerFor, useOnline, usePersistentDocument } from '@/services/persistence';
 import { useSession } from '@/session/SessionProvider';
+import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
 import {
   createState,
   hydrate,
@@ -65,6 +66,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     serialise,
   });
   const { data: state, setData: setState } = document;
+  /* How long his own messages run — a word count only, never the text. */
+  const capability = useCapabilityRecorder();
   const online = useOnline();
 
   /*
@@ -95,7 +98,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       closeThread: () => setOpenThreadKey(null),
       send: (dealerId, text) => {
         const { state: next, sent } = sendMessage(state, dealerId, text, Date.now());
-        if (sent) setState(next);
+        if (sent) {
+          setState(next);
+          const words = text.trim().split(/\s+/).filter(Boolean).length;
+          if (words <= 8) capability.recordEvent('messageSimple');
+          else if (words > 20) capability.recordEvent('messageComplex');
+        }
         return sent;
       },
     }),

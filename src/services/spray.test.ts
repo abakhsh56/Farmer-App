@@ -31,8 +31,11 @@ const NOW = localDayStart(Date.now()) + 10 * HOUR;
 function hour(atMs: number, over: Partial<WeatherHour> = {}): WeatherHour {
   return {
     timeMs: atMs,
+    /* Dew point 19 against 25° is a Delta T of 6 — inside the 2–8 band, so
+       the default hour is a spray hour and only the overridden factor fails. */
     tempC: 25,
     humidityPct: 60,
+    dewPointC: 19,
     windKph: 8,
     precipProbPct: 0,
     precipMm: 0,
@@ -113,6 +116,61 @@ describe('isSprayHour', () => {
   it('refuses a missing number — an unmeasured wind is not a calm wind', () => {
     expect(isSprayHour(hour(NOW, { windKph: null }))).toBe(false);
     expect(isSprayHour(hour(NOW, { tempC: null }))).toBe(false);
+  });
+
+  it('refuses still air — below 6 km/h the spray hangs in an inversion', () => {
+    expect(isSprayHour(hour(NOW, { windKph: 3 }))).toBe(false);
+    expect(isSprayHour(hour(NOW, { windKph: 6 }))).toBe(true);
+  });
+
+  it('refuses cold — below 10°C the chemical works too slowly', () => {
+    expect(isSprayHour(hour(NOW, { tempC: 8 }))).toBe(false);
+    /* 10° with a dew point of 5° is a Delta T of 5 — inside the band. */
+    expect(isSprayHour(hour(NOW, { tempC: 10, dewPointC: 5 }))).toBe(true);
+  });
+
+  it('refuses a Delta T outside 2–8°C, and a missing dew point is not a pass', () => {
+    /* Delta T 1 (dew point 24, near saturation) and 10 (dew point 15, fast evaporation). */
+    expect(isSprayHour(hour(NOW, { dewPointC: 24 }))).toBe(false);
+    expect(isSprayHour(hour(NOW, { dewPointC: 15 }))).toBe(false);
+    expect(isSprayHour(hour(NOW, { dewPointC: null }))).toBe(false);
+    expect(isSprayHour(hour(NOW, { dewPointC: 19 }))).toBe(true);
+  });
+
+  it('names still air when no run is long enough because the wind never rises', () => {
+    const hours = dayHours().map((h) => ({ ...h, windKph: 3 }));
+    const advice = computeSprayAdvice({
+      now: sourcedNow(),
+      hourly: sourcedHourly(hours),
+      hasCrop: true,
+      nowMs: NOW,
+    });
+    expect(advice.state).toBe('no-window');
+    expect(advice.reason).toBe('calm-wind');
+  });
+
+  it('names cold when no run is long enough because it never warms up', () => {
+    const hours = dayHours().map((h) => ({ ...h, tempC: 7 }));
+    const advice = computeSprayAdvice({
+      now: sourcedNow(),
+      hourly: sourcedHourly(hours),
+      hasCrop: true,
+      nowMs: NOW,
+    });
+    expect(advice.state).toBe('no-window');
+    expect(advice.reason).toBe('cold');
+  });
+
+  it('names Delta T when no run is long enough because the spread is wrong', () => {
+    const hours = dayHours().map((h) => ({ ...h, dewPointC: 24 }));
+    const advice = computeSprayAdvice({
+      now: sourcedNow(),
+      hourly: sourcedHourly(hours),
+      hasCrop: true,
+      nowMs: NOW,
+    });
+    expect(advice.state).toBe('no-window');
+    expect(advice.reason).toBe('deltaT');
   });
 });
 
@@ -305,6 +363,30 @@ describe('sprayAdviceLines', () => {
     }, '', '');
     expect(lines.title).toBe('weather.spray.doNot');
     expect(lines.body).toBe('weather.spray.doNotThunder');
+  });
+
+  it('renders no-window with the still-air, cold and Delta T reasons', () => {
+    const base = {
+      state: 'no-window' as const,
+      category: 'weather' as const,
+      level: 'info' as const,
+      priority: 10,
+      windowStartMs: null,
+      windowEndMs: null,
+      day: null,
+    };
+    expect(sprayAdviceLines(translate, { ...base, reason: 'calm-wind' }, '', '').body).toBe(
+      'weather.spray.noWindowCalm',
+    );
+    expect(sprayAdviceLines(translate, { ...base, reason: 'cold' }, '', '').body).toBe(
+      'weather.spray.noWindowCold',
+    );
+    expect(sprayAdviceLines(translate, { ...base, reason: 'deltaT' }, '', '').body).toBe(
+      'weather.spray.noWindowDeltaT',
+    );
+    expect(sprayAdviceLines(translate, { ...base, reason: 'humidity' }, '', '').body).toBe(
+      'weather.spray.noWindowHumidity',
+    );
   });
 
   it('renders no-window with the wind reason', () => {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AppTabBar, type TabKey } from '@/components/AppTabBar';
 import { Toaster } from '@/components/ui/sonner';
 import { ChatProvider, useChat } from '@/chat/ChatProvider';
+import { CapabilityProvider } from '@/capability/CapabilityProvider';
 import { CommunityProvider } from '@/community/CommunityProvider';
 import { CreditProvider } from '@/credit/CreditProvider';
 import { LocaleProvider } from '@/i18n/LocaleProvider';
@@ -73,6 +74,7 @@ export function App({ services }: { services?: Services } = {}) {
               answer.
             */}
             <LocationProvider>
+            <CapabilityProvider>
             <VisitProvider>
               <CreditProvider>
                 <InsightProvider>
@@ -103,6 +105,7 @@ export function App({ services }: { services?: Services } = {}) {
                 </InsightProvider>
               </CreditProvider>
             </VisitProvider>
+            </CapabilityProvider>
             </LocationProvider>
           </SessionProvider>
         </ServicesProvider>

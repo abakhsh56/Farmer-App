@@ -15,6 +15,7 @@ import {
   Sprout,
   Store,
   SunMoon,
+  Type,
   type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -38,6 +39,8 @@ import { initialsOf } from '@/lib/initials';
 import { configurationReport } from '@/services/config';
 import { useSyncHealth } from '@/services/persistence';
 import { useTheme, type Theme } from '@/theme/ThemeProvider';
+import { useCapability } from '@/capability/CapabilityProvider';
+import type { CapabilityLevel } from '@/services/capability';
 
 /**
  * Profile — who the farmer is, their farm at a glance, and everything that is
@@ -59,6 +62,7 @@ export function ProfileScreen({
 }) {
   const { t, locale, setLocale } = useLocale();
   const { theme, setTheme } = useTheme();
+  const capability = useCapability();
   const { account, signOut, prompt } = useSession();
   const credit = useCredit();
   const insights = useInsights();
@@ -275,6 +279,25 @@ export function ProfileScreen({
           ]}
           selected={theme}
           onSelect={(next) => setTheme(next as Theme)}
+        />
+        {/*
+          How much detail the advice carries. The app learns this from how
+          the farmer uses it — voice, listening, long text — but the choice
+          is his: setting it here is never overridden by a later signal.
+        */}
+        <ChoiceRow
+          icon={Type}
+          label={t('capability.change')}
+          value={t(`capability.${capability.level}`)}
+          sheetTitle={t('capability.change')}
+          hint={t('capability.hint')}
+          options={[
+            { value: 'simple', label: t('capability.simple') },
+            { value: 'standard', label: t('capability.standard') },
+            { value: 'detailed', label: t('capability.detailed') },
+          ]}
+          selected={capability.level}
+          onSelect={(next) => capability.setLevel(next as CapabilityLevel)}
         />
         <Row icon={Bell} label={t('profile.notifications')} />
         <Row icon={HelpCircle} label={t('profile.help')} last />

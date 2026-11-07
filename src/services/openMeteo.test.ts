@@ -271,6 +271,7 @@ describe('Open-Meteo provider', () => {
         time: times,
         temperature_2m: times.map((_, i) => 24 + (i % 12)),
         relative_humidity_2m: times.map(() => 60),
+        dew_point_2m: times.map(() => 19),
         wind_speed_10m: times.map(() => 8),
         precipitation_probability: times.map(() => 0),
         precipitation: times.map(() => 0),
@@ -287,6 +288,7 @@ describe('Open-Meteo provider', () => {
     expect(hourly.data[0]).toMatchObject({
       tempC: 24,
       humidityPct: 60,
+      dewPointC: 19,
       windKph: 8,
       precipProbPct: 0,
       precipMm: 0,

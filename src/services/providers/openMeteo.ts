@@ -142,6 +142,7 @@ const DAILY_FIELDS = [
 const HOURLY_FIELDS = [
   'temperature_2m',
   'relative_humidity_2m',
+  'dew_point_2m',
   'wind_speed_10m',
   'precipitation_probability',
   'precipitation',
@@ -322,6 +323,7 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
       const hums = Array.isArray(hourly.relative_humidity_2m)
         ? hourly.relative_humidity_2m
         : [];
+      const dews = Array.isArray(hourly.dew_point_2m) ? hourly.dew_point_2m : [];
       const winds = Array.isArray(hourly.wind_speed_10m) ? hourly.wind_speed_10m : [];
       const probs = Array.isArray(hourly.precipitation_probability)
         ? hourly.precipitation_probability
@@ -341,6 +343,7 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
           timeMs: stamp,
           tempC: num(temps[index]),
           humidityPct: num(hums[index]),
+          dewPointC: num(dews[index]),
           windKph: num(winds[index]),
           precipProbPct: num(probs[index]),
           precipMm: num(precips[index]),

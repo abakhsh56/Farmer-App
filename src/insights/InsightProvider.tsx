@@ -10,6 +10,8 @@ import { useLocale } from '@/i18n/LocaleProvider';
 import { ownerFor, usePersistentDocument } from '@/services/persistence';
 import { recordSignal, toCropCode } from '@/services/signals';
 import { useSession } from '@/session/SessionProvider';
+import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
+import { LONG_BODY_CHARS } from '@/services/capability';
 import { InsightSheets } from '@/components/insights/Insights';
 import {
   activeForCrop,
@@ -101,6 +103,9 @@ function insightSignal(
 export function InsightProvider({ children }: { children: ReactNode }) {
   const { t } = useLocale();
   const { account } = useSession();
+  /* Opening or dismissing long advice is the farmer saying how much text
+     he wants — the capability signal for "shorter" vs "more". */
+  const capability = useCapabilityRecorder();
   /* Crops, advice and read state are the farmer's own record, so they follow the
      account as soon as there is one — his wheat does not disappear on sign-in. */
   const ownerId = useMemo(() => ownerFor(account?.id ?? null), [account?.id]);
@@ -133,6 +138,10 @@ export function InsightProvider({ children }: { children: ReactNode }) {
         setNotificationsOpen(false);
         setOpenInsightId(insightId);
         setData((current) => markViewed(current, insightId));
+        const opened = insightById(data, insightId);
+        if (opened && t(opened.bodyKey).length > LONG_BODY_CHARS) {
+          capability.recordEvent('longTextOpened');
+        }
         /*
          * Opening advice is the farmer saying "this matters enough to read". A
          * view is a weak signal on its own — one read does not mean a crop is
@@ -158,6 +167,10 @@ export function InsightProvider({ children }: { children: ReactNode }) {
       dismiss: (insightId) => {
         setData((current) => dismissIn(current, insightId));
         setOpenInsightId(null);
+        const dismissed = insightById(data, insightId);
+        if (dismissed && t(dismissed.bodyKey).length > LONG_BODY_CHARS) {
+          capability.recordEvent('longTextDismissed');
+        }
         /*
          * A dismissal is the strongest signal the feed gives: the farmer looked
          * at this advice and said no. It is recorded as such, so the engine can
@@ -176,7 +189,10 @@ export function InsightProvider({ children }: { children: ReactNode }) {
         }
       },
       makePrimary: (cropId) => setData((current) => makePrimaryIn(current, cropId)),
-      addCrop: (input) => setData((current) => addCropIn(current, input, Date.now())),
+      addCrop: (input) => {
+        setData((current) => addCropIn(current, input, Date.now()));
+        capability.recordEvent('flowCompleted');
+      },
       chooseCrop: (input) => setData((current) => chooseCropIn(current, input, Date.now())),
       notifications: visibleNotifications(data, now),
       unread: unreadCount(data, now),

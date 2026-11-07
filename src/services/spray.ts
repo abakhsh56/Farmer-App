@@ -68,8 +68,12 @@ export type SprayAdvice = {
     | 'thunderstorm'
     | 'heavy-rain'
     | 'wind'
+    | 'calm-wind'
     | 'rain'
     | 'heat'
+    | 'cold'
+    | 'deltaT'
+    | 'humidity'
     | 'no-data'
     | 'no-crop';
 };
@@ -85,10 +89,15 @@ const DO_NOT_SPRAY_WATCH = new Set([65, 67, 82]);
 /**
  * What makes one hour safe to spray in.
  *
- * · wind at or under 15 km/h, so the spray lands on the crop instead of
- *   drifting onto the neighbour's field.
- * · temperature at or under 32°C, so droplets do not evaporate before they
- *   land and the chemical does not scorch the leaf.
+ * · wind 6–16 km/h. Below 6 the air is still and the spray hangs in an
+ *   inversion layer instead of settling; above 16 it drifts onto the
+ *   neighbour's field.
+ * · temperature 10–29°C. Below 10 the chemical works too slowly; above 29
+ *   droplets evaporate before they land and the chemical can scorch the leaf.
+ * · Delta T (air temperature minus dew point) 2–8°C. Below 2 the air is
+ *   near saturation and droplets stay wet too long; above 8 evaporation is
+ *   fast. A missing dew point is not a pass — the spread cannot be computed,
+ *   so the hour is not a spray hour.
  * · humidity at or above 40%, for the same evaporation reason.
  * · rain probability under 30% and no rain in the hour, so the spray is
  *   not washed off before it dries.
@@ -97,19 +106,35 @@ const DO_NOT_SPRAY_WATCH = new Set([65, 67, 82]);
  * A number the source did not report is not a pass: an hour whose wind was
  * never measured is not a calm hour.
  */
-const MAX_WIND_KPH = 15;
-const MAX_TEMP_C = 32;
+const MIN_WIND_KPH = 6;
+const MAX_WIND_KPH = 16;
+const MIN_TEMP_C = 10;
+const MAX_TEMP_C = 29;
+const MIN_DELTA_T_C = 2;
+const MAX_DELTA_T_C = 8;
 const MIN_HUMIDITY_PCT = 40;
 const MAX_RAIN_PROB_PCT = 30;
 const MIN_WINDOW_HOURS = 2;
+
+/**
+ * Delta T for an hour: air temperature minus dew point, in °C. Null when
+ * either number is missing — a spread that cannot be computed is not a pass.
+ */
+export function deltaT(hour: WeatherHour): number | null {
+  if (hour.tempC === null || hour.dewPointC === null) return null;
+  return hour.tempC - hour.dewPointC;
+}
 
 export function isSprayHour(hour: WeatherHour): boolean {
   if (hour.weatherCode !== null && hour.weatherCode !== undefined) {
     if (DO_NOT_SPRAY_URGENT.has(hour.weatherCode)) return false;
     if (DO_NOT_SPRAY_WATCH.has(hour.weatherCode)) return false;
   }
-  if (hour.windKph === null || hour.windKph > MAX_WIND_KPH) return false;
-  if (hour.tempC === null || hour.tempC > MAX_TEMP_C) return false;
+  if (hour.windKph === null || hour.windKph < MIN_WIND_KPH || hour.windKph > MAX_WIND_KPH)
+    return false;
+  if (hour.tempC === null || hour.tempC < MIN_TEMP_C || hour.tempC > MAX_TEMP_C) return false;
+  const spread = deltaT(hour);
+  if (spread === null || spread < MIN_DELTA_T_C || spread > MAX_DELTA_T_C) return false;
   if (hour.humidityPct === null || hour.humidityPct < MIN_HUMIDITY_PCT) return false;
   if (hour.precipProbPct !== null && hour.precipProbPct >= MAX_RAIN_PROB_PCT) return false;
   if (hour.precipMm !== null && hour.precipMm > 0) return false;
@@ -117,7 +142,9 @@ export function isSprayHour(hour: WeatherHour): boolean {
 }
 
 /** The single factor that blocks an hour, in the order that matters most. */
-function blockingReason(hour: WeatherHour): 'thunderstorm' | 'heavy-rain' | 'rain' | 'wind' | 'heat' | 'humidity' | null {
+function blockingReason(
+  hour: WeatherHour,
+): 'thunderstorm' | 'heavy-rain' | 'rain' | 'wind' | 'calm-wind' | 'heat' | 'cold' | 'deltaT' | 'humidity' | null {
   if (hour.weatherCode !== null && hour.weatherCode !== undefined) {
     if (DO_NOT_SPRAY_URGENT.has(hour.weatherCode)) return 'thunderstorm';
     if (DO_NOT_SPRAY_WATCH.has(hour.weatherCode)) return 'heavy-rain';
@@ -125,7 +152,11 @@ function blockingReason(hour: WeatherHour): 'thunderstorm' | 'heavy-rain' | 'rai
   if (hour.precipProbPct !== null && hour.precipProbPct >= MAX_RAIN_PROB_PCT) return 'rain';
   if (hour.precipMm !== null && hour.precipMm > 0) return 'rain';
   if (hour.windKph === null || hour.windKph > MAX_WIND_KPH) return 'wind';
+  if (hour.windKph < MIN_WIND_KPH) return 'calm-wind';
   if (hour.tempC === null || hour.tempC > MAX_TEMP_C) return 'heat';
+  if (hour.tempC < MIN_TEMP_C) return 'cold';
+  const spread = deltaT(hour);
+  if (spread === null || spread < MIN_DELTA_T_C || spread > MAX_DELTA_T_C) return 'deltaT';
   if (hour.humidityPct === null || hour.humidityPct < MIN_HUMIDITY_PCT) return 'humidity';
   return null;
 }
@@ -268,7 +299,15 @@ export function computeSprayAdvice(input: {
   }
 
   /* No run long enough: name the factor that blocked the most hours. */
-  const blocked: Record<string, number> = { wind: 0, rain: 0, heat: 0, humidity: 0 };
+  const blocked: Record<string, number> = {
+    wind: 0,
+    'calm-wind': 0,
+    rain: 0,
+    heat: 0,
+    cold: 0,
+    deltaT: 0,
+    humidity: 0,
+  };
   for (const hour of hours) {
     const reason = blockingReason(hour);
     if (reason === 'thunderstorm' || reason === 'heavy-rain' || reason === 'rain') {
@@ -281,7 +320,21 @@ export function computeSprayAdvice(input: {
     (a, b) => b[1] - a[1],
   )[0]?.[0];
   const reason: SprayAdvice['reason'] =
-    dominant === 'wind' ? 'wind' : dominant === 'rain' ? 'rain' : dominant === 'heat' ? 'heat' : 'wind';
+    dominant === 'wind'
+      ? 'wind'
+      : dominant === 'calm-wind'
+        ? 'calm-wind'
+        : dominant === 'rain'
+          ? 'rain'
+          : dominant === 'heat'
+            ? 'heat'
+            : dominant === 'cold'
+              ? 'cold'
+              : dominant === 'deltaT'
+                ? 'deltaT'
+                : dominant === 'humidity'
+                  ? 'humidity'
+                  : 'wind';
   return noWindowAdvice(reason);
 }
 
@@ -325,7 +378,15 @@ export function sprayAdviceLines(
             ? 'weather.spray.noWindowRain'
             : advice.reason === 'heat'
               ? 'weather.spray.noWindowHeat'
-              : 'weather.spray.noWindowWind',
+              : advice.reason === 'calm-wind'
+                ? 'weather.spray.noWindowCalm'
+                : advice.reason === 'cold'
+                  ? 'weather.spray.noWindowCold'
+                  : advice.reason === 'deltaT'
+                    ? 'weather.spray.noWindowDeltaT'
+                    : advice.reason === 'humidity'
+                      ? 'weather.spray.noWindowHumidity'
+                      : 'weather.spray.noWindowWind',
         ),
       };
     }

@@ -96,6 +96,8 @@ export type WeatherHour = {
   tempC: number | null;
   humidityPct: number | null;
   windKph: number | null;
+  /** Dew point, °C. Null when the source did not report it. */
+  dewPointC: number | null;
   /** Chance of precipitation in this hour, 0–100. Null when the source is silent. */
   precipProbPct: number | null;
   precipMm: number | null;
@@ -521,6 +523,7 @@ export type Collection =
   | 'community'
   | 'chat'
   | 'crops'
+  | 'capability'
   | 'media';
 
 export interface Repository {

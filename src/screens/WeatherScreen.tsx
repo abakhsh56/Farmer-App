@@ -16,8 +16,17 @@ import { formatHour, formatRelativeTime, formatWeekdayDate, intlLocale } from '@
 import { useInsights } from '@/insights/InsightProvider';
 import { useLocation } from '@/location/LocationProvider';
 import { useForecast, useHourly, useWeather } from '@/services/hooks';
-import { computeSprayAdvice, sprayAdviceLines } from '@/services/spray';
-import { isWeatherStale, isWeatherUsable, type WeatherDay } from '@/services/types';
+import {
+  computeCardAdvisory,
+  expertAnswerFromPosts,
+  pestReportsFromPosts,
+  type AdvisoryItem,
+} from '@/services/advisory';
+import { renderAdvisoryCopy } from '@/services/advisoryCopy';
+import { useCapability } from '@/capability/CapabilityProvider';
+import { useCommunity } from '@/community/CommunityProvider';
+import { ME, PLACES } from '@/data/community';
+import { isWeatherStale, type WeatherDay } from '@/services/types';
 import { daylightProgress, sunTimes, type SunTimes } from '@/services/sun';
 
 /**
@@ -126,42 +135,68 @@ function useAnimatedFraction(target: number): number {
 }
 
 export function WeatherScreen({ onBack }: { onBack: () => void }) {
-  const { t, locale } = useLocale();
+  const { t, tIn, locale } = useLocale();
   const location = useLocation();
   const weather = useWeather(location.activePoint);
   const forecast = useForecast(location.activePoint, 4);
 
   const reading = weather.sourced;
   const now = Date.now();
-  const weatherUsable = reading !== null && isWeatherUsable(reading);
   const readingStale = reading !== null && isWeatherStale(reading);
 
   /*
-   * The spray window, computed from the live hourly forecast — the same
-   * advice the Home card prints, from the same numbers, so a farmer moving
-   * between the two surfaces never reads two different windows for the same
-   * morning. A thunderstorm or heavy rain outranks the window (do not spray);
-   * with no crop, no live data, or no suitable run, the line says so plainly
-   * instead of inventing a time.
+   * The same advice the Home card prints, from the same computed list — a
+   * farmer moving between the two surfaces never reads two different
+   * windows for the same morning. The list is the ten signal-driven items
+   * in the PRD alert model's priority order, at most three.
    */
   const hourly = useHourly(location.activePoint, 24);
   const insights = useInsights();
-  const sprayAdvice = computeSprayAdvice({
-    now: reading,
-    hourly: hourly.sourced,
-    hasCrop: insights.primary !== undefined,
-    nowMs: now,
-  });
-  const sprayStartHour =
-    sprayAdvice.windowStartMs !== null ? new Date(sprayAdvice.windowStartMs).getHours() : null;
-  const sprayEndHour =
-    sprayAdvice.windowEndMs !== null ? new Date(sprayAdvice.windowEndMs).getHours() : null;
-  const sprayLines = sprayAdviceLines(
-    t,
-    sprayAdvice,
-    sprayStartHour !== null ? formatHour(sprayStartHour, t) : '',
-    sprayEndHour !== null ? formatHour(sprayEndHour, t) : '',
+  const community = useCommunity();
+  const capability = useCapability();
+  const crop = insights.primary ?? null;
+  const advisory: AdvisoryItem[] = computeCardAdvisory(
+    {
+      now: reading,
+      hourly: hourly.sourced,
+      forecast: forecast.sourced,
+      crop,
+      insights: crop ? insights.forCrop(crop.id) : [],
+      actedInsights: crop
+        ? insights.forCrop(crop.id).filter((entry) => entry.status === 'acted')
+        : [],
+      pestReports: pestReportsFromPosts(
+        community.posts,
+        (postId) => community.expertAnswered(postId),
+        ME,
+        (placeId) => {
+          const place = PLACES.find((entry) => entry.id === placeId);
+          return place ? t(place.labelKey) : t('location.none');
+        },
+      ),
+      expertAnswer: expertAnswerFromPosts(
+        community.posts,
+        (postId) => community.expertAnswered(postId),
+        ME,
+      ),
+      sources: {
+        weather: reading?.sourceLabel ?? t('advisory.source.openMeteo'),
+        community: t('advisory.source.community'),
+        communityExpert: t('advisory.source.communityExpert'),
+        knowledge: t('advisory.source.knowledge'),
+      },
+    },
+    now,
   );
+  const advisoryCopies = advisory.map((item) =>
+    renderAdvisoryCopy(item, capability.level, {
+      t,
+      tUr: (key, values) => tIn('ur', key, values),
+      formatHour: (hour) => formatHour(hour, t),
+      formatHourUr: (hour) => formatHour(hour, (key, values) => tIn('ur', key, values)),
+    }),
+  );
+
   const times = sunTimes(new Date(now), location.activePoint);
   const animatedTemp = useCountUp(reading?.data.tempC ?? null);
 
@@ -291,32 +326,41 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
       ) : null}
 
       {/*
-        The same two sentences the Home card carries, from the same computed
-        advice rather than re-worded: a farmer moving between the two surfaces
-        must not read two different spray windows for the same morning. When
-        the reading cannot carry advice, the section says so the way the Home
-        card does — a reading too old to spray on is not a service that
-        answered nothing.
+        The same advice the Home card carries, from the same computed list
+        rather than re-worded: a farmer moving between the two surfaces must
+        not read two different spray windows for the same morning. Each item
+        carries its source and its freshness.
       */}
-      <section className="mt-8 rounded-lg border border-foreground/10 bg-white/40 p-4 dark:bg-white/10">
-        {weatherUsable ? (
-          <>
-            <p className="text-body font-medium">{sprayLines.title}</p>
-            <p className="mt-1 text-body-sm text-foreground/70">{sprayLines.body}</p>
-          </>
-        ) : (
-          <>
-            <p className="text-body font-medium">
-              {readingStale ? t('weather.stale.title') : t('weather.unavailable.title')}
-            </p>
-            <p className="mt-1 text-body-sm text-foreground/70">
-              {readingStale && reading
-                ? t('weather.stale', { age: formatRelativeTime(reading.observedAt, now, t) })
-                : t('weather.unavailable.body')}
-            </p>
-          </>
-        )}
-      </section>
+      {advisory.length > 0 ? (
+        <section className="mt-8 rounded-lg border border-foreground/10 bg-white/40 p-4 dark:bg-white/10">
+          <ul className="flex flex-col gap-3">
+            {advisory.map((item, index) => {
+              const copy = advisoryCopies[index];
+              if (!copy) return null;
+              return (
+                <li key={`${item.kind}-${index}`}>
+                  <p className="text-body font-medium">{copy.title}</p>
+                  <p className="mt-1 text-body-sm text-foreground/70">{copy.body}</p>
+                  <p className="mt-1 text-caption text-foreground/60">
+                    {item.source} · {formatRelativeTime(item.observedAt, now, t)}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : (
+        <section className="mt-8 rounded-lg border border-foreground/10 bg-white/40 p-4 dark:bg-white/10">
+          <p className="text-body font-medium">
+            {readingStale ? t('weather.stale.title') : t('weather.unavailable.title')}
+          </p>
+          <p className="mt-1 text-body-sm text-foreground/70">
+            {readingStale && reading
+              ? t('weather.stale', { age: formatRelativeTime(reading.observedAt, now, t) })
+              : t('weather.unavailable.body')}
+          </p>
+        </section>
+      )}
 
       {reading ? (
         <p className="mt-5 flex items-center justify-center gap-1.5 text-caption text-foreground/60">

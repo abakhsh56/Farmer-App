@@ -19,6 +19,7 @@ import { useStockists } from '@/services/hooks';
 import { recordSignal } from '@/services/signals';
 import { verdictFor, type Verdict } from '@/scan/analyze';
 import { useSession } from '@/session/SessionProvider';
+import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
 import {
   Choicebox,
   ChoiceboxIndicator,
@@ -84,6 +85,7 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
   const { t, locale } = useLocale();
   const credit = useCredit();
   const { account, requestIdentity } = useSession();
+  const capability = useCapabilityRecorder();
   const [step, setStep] = useState<Step>('capture');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [expertAsked, setExpertAsked] = useState(false);
@@ -168,6 +170,8 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
     recognition.interimResults = false;
     recognition.onresult = (event) => {
       const said = event.results[0]?.[0]?.transcript ?? '';
+      /* He dictated instead of typing: a voice-first farmer, in the moment. */
+      if (said.trim().length > 0) capability.recordEvent('voiceInput');
       setQuestion((current) => (current ? `${current} ${said}` : said));
     };
     recognition.onend = () => setListening(false);
