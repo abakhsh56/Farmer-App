@@ -251,35 +251,43 @@ export function HomeScreen({
   const speechTag = LOCALE_REGISTRY.ur.tag;
   const listening = speech.speaking === 'weather';
   /*
-   * The words behind the Listen pill — always in Urdu, and the advice part
-   * is the top advisory item's own listen text, so what is heard is the
-   * same advice the card prints, in the words this farmer reads.
+   * The words behind the Listen pill — always in Urdu, and told like a
+   * person explaining, not read off the screen. The farmer hears where
+   * this is about and what the weather is doing there, in one sentence,
+   * and then what it means for him, in the top advisory item's own
+   * listen text. The humidity and wind are not read out as bare figures:
+   * the advice already names the wind when it is the reason to act, and
+   * the screen still shows the numbers.
    */
   const topListen = advisoryCopies[0]?.listenText ?? '';
   /* The place first, then the weather and the advice for it — the farmer
      hears where this is about before he hears what to do. */
+  const conditionText = reading?.data.conditionKey
+    ? tIn('ur', reading.data.conditionKey)
+    : reading?.data.conditionText ?? null;
+  const tempText =
+    reading?.data.tempC === null || reading?.data.tempC === undefined
+      ? null
+      : tIn('ur', 'weather.spokenTemp', { value: Math.round(reading.data.tempC) });
+  const placeText = location.placeLabel || null;
+  /* One sentence for the setting; when a part is missing the opening falls
+     back to the parts that are there, so a missing number never leaves a
+     hole in the sentence. */
+  const opening =
+    placeText && conditionText && tempText
+      ? tIn('ur', 'weather.spoken.opening', {
+          place: placeText,
+          condition: conditionText,
+          temp: tempText,
+        })
+      : [placeText, conditionText, tempText]
+          .filter((part): part is string => Boolean(part))
+          .join('، ');
   const spokenAdvice =
     reading && weatherUsable
-      ? [
-          location.placeLabel || null,
-          reading.data.conditionKey
-            ? tIn('ur', reading.data.conditionKey)
-            : reading.data.conditionText,
-          reading.data.tempC === null
-            ? null
-            : tIn('ur', 'weather.spokenTemp', { value: Math.round(reading.data.tempC) }),
-          reading.data.humidityPct === null
-            ? null
-            : tIn('ur', 'weather.humidity', { value: reading.data.humidityPct }),
-          reading.data.windKph === null
-            ? null
-            : reading.data.windKph > 0
-              ? tIn('ur', 'weather.windValue', { speed: Math.round(reading.data.windKph) })
-              : tIn('ur', 'weather.wind'),
-          topListen || null,
-        ]
+      ? [opening, topListen || null]
           .filter((part): part is string => Boolean(part))
-          .join('. ')
+          .join(' ')
       : '';
 
   /*
