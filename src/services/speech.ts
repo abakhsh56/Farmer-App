@@ -109,7 +109,10 @@ export function pickVoice(
   const base = baseLanguage(tag);
   return (
     voices.find((voice) => voice.lang.toLowerCase() === wanted) ??
-    voices.find((voice) => baseLanguage(voice.lang) === base)
+    voices.find((voice) => baseLanguage(voice.lang) === base) ??
+    /* A voice whose tag is unhelpful but whose name says Urdu — some engines
+       report the language loosely and the name plainly. */
+    voices.find((voice) => voice.name.toLowerCase().includes('urdu'))
   );
 }
 
