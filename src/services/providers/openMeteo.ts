@@ -38,6 +38,26 @@ const ENDPOINT = 'https://api.open-meteo.com/v1/forecast';
 const USABLE_AGE_MS = 2 * 60 * 60 * 1000;
 
 /**
+ * Pakistan, bounding box. The app serves Pakistani farmers only, so weather
+ * for a point outside this box is refused, never fetched: latitude 23.5 to
+ * 37.1, longitude 60.8 to 77.0 covers the whole country including
+ * Gilgit-Baltistan. The location search is already Pakistan-only; this is the
+ * same rule at the weather boundary, so a coordinate that arrives any other
+ * way is held to it too.
+ */
+const PAKISTAN_BOUNDS = { minLat: 23.5, maxLat: 37.1, minLon: 60.8, maxLon: 77.0 };
+
+/** True when the point is inside Pakistan. */
+export function inPakistan(point: GeoPoint): boolean {
+  return (
+    point.lat >= PAKISTAN_BOUNDS.minLat &&
+    point.lat <= PAKISTAN_BOUNDS.maxLat &&
+    point.lon >= PAKISTAN_BOUNDS.minLon &&
+    point.lon <= PAKISTAN_BOUNDS.maxLon
+  );
+}
+
+/**
  * WMO 4677 weather codes, as Open-Meteo reports them, reduced to the handful of
  * conditions a farmer's screen needs to name.
  */
@@ -155,6 +175,12 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
   }
 
   private async get(point: GeoPoint, query: string): Promise<Record<string, unknown>> {
+    // The single boundary every weather call passes through: a point outside
+    // Pakistan never reaches the vendor. The throw is caught by `current` /
+    // `forecast` and reported as a failure, the way any other failure is.
+    if (!inPakistan(point)) {
+      throw new Error('Weather is available for Pakistan only.');
+    }
     const response = await this.fetchImpl(this.url(point, query));
     if (!response.ok) {
       throw new Error(`Open-Meteo answered ${response.status}.`);

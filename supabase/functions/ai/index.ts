@@ -206,12 +206,22 @@ async function fetchMarketRates(
     .slice(0, 8) as unknown as MarketRateRow[];
 }
 
+/**
+ * Pakistan, bounding box — the same box the app's weather provider enforces.
+ * The AI weather path serves Pakistani farmers only: a location outside it is
+ * treated as no location, so `latest_weather` is never asked about it.
+ */
+function inPakistan(lat: number, lon: number): boolean {
+  return lat >= 23.5 && lat <= 37.1 && lon >= 60.8 && lon <= 77.0;
+}
+
 /** Latest reading from `latest_weather()`; null when no reading exists. */
 async function fetchWeather(
   client: ReturnType<typeof adminClient>,
   lat: number,
   lon: number,
 ): Promise<WeatherRow | null> {
+  if (!inPakistan(lat, lon)) return null;
   const { data, error } = await client.rpc('latest_weather', { p_lat: lat, p_lon: lon });
   if (error || !Array.isArray(data)) return null;
   const row = (data as Array<Record<string, unknown>>)[0];
@@ -252,8 +262,7 @@ function liveDataBlock(rates: MarketRateRow[], weather: WeatherRow | null): stri
       );
     }
   }
-  return lines.join('
-');
+  return lines.join('\n');
 }
 
 /** Confidence for an answer grounded only in live data, not knowledge. */
@@ -389,7 +398,10 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
   const client = adminClient();
   const wantsMarket = asksAbout(question, MARKET_TERMS);
   const wantsWeather = asksAbout(question, WEATHER_TERMS);
-  const hasLocation = typeof context.lat === 'number' && typeof context.lon === 'number';
+  const hasLocation =
+    typeof context.lat === 'number' &&
+    typeof context.lon === 'number' &&
+    inPakistan(context.lat, context.lon);
   const [{ hits, mode }, rates, weather] = await Promise.all([
     retrieveKnowledge(client, question, {
       cropCode: context.cropCode ?? null,
@@ -431,7 +443,7 @@ async function handleAsk(body: Record<string, unknown>): Promise<Response> {
       caveats: [
         'No published knowledge entry matched this question.',
         ...(wantsWeather && !hasLocation
-          ? ['No location was sent with the question, so no weather reading could be fetched.']
+          ? ['No usable location was sent with the question, so no weather reading could be fetched.']
           : []),
         ...(weather && !weather.is_usable
           ? ['The latest weather reading is not usable, so no weather answer could be given.']

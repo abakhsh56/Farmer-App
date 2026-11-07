@@ -203,6 +203,38 @@ describe('Open-Meteo provider', () => {
     expect(reading.error).toMatch(/ENOTFOUND/);
   });
 
+  it('never fetches weather for a point outside Pakistan', async () => {
+    const { fetchImpl, provider } = providerReturning(LIVE_PAYLOAD);
+    // London: far outside the Pakistan box.
+    const outside: GeoPoint = { lat: 51.507, lon: -0.128 };
+
+    const reading = await provider.current(outside);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(reading.status).toBe('failing');
+    expect(reading.freshness).toBe('unavailable');
+    expect(reading.error).toMatch(/Pakistan only/);
+    expect(reading.data.tempC).toBeNull();
+    expect(isWeatherUsable(reading)).toBe(false);
+
+    const forecast = await provider.forecast(outside, 3);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(forecast.status).toBe('failing');
+    expect(forecast.data).toHaveLength(0);
+  });
+
+  it('still serves points inside Pakistan, edge to edge', async () => {
+    const { fetchImpl, provider } = providerReturning(LIVE_PAYLOAD);
+    // Karachi in the south, Gilgit in the north.
+    for (const point of [
+      { lat: 24.86, lon: 67.0 },
+      { lat: 35.92, lon: 74.31 },
+    ]) {
+      const reading = await provider.current(point);
+      expect(reading.status).toBe('live');
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   it('maps the daily forecast and clamps how far ahead it will ask', async () => {
     const seen: string[] = [];
     const fetchImpl = (async (url: string) => {
