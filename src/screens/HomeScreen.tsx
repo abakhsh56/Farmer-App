@@ -482,12 +482,19 @@ export function HomeScreen({
                   speech.stop();
                   return;
                 }
-                /* speak reports whether it started; a press that cannot speak
-                   is answered here, not with silence. */
-                const started = speech.speak({ id: 'weather', text: spokenAdvice, lang: speechTag });
-                if (!started) {
-                  toast.error(t('weather.listenUnavailable'));
-                }
+                /* speak resolves only when the first part actually begins;
+                   a press the engine refuses resolves false and is answered
+                   here, not with silence. */
+                void speech
+                  .speak({ id: 'weather', text: spokenAdvice, lang: speechTag })
+                  .then((started) => {
+                    if (!started) {
+                      toast.error(t('weather.listenUnavailable'));
+                    }
+                  })
+                  .catch(() => {
+                    toast.error(t('weather.listenUnavailable'));
+                  });
               }}
               aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
               className="flex items-center gap-1.5 rounded-full bg-white/12 px-3 py-1.5 text-label text-white"

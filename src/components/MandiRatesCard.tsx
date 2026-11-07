@@ -21,6 +21,7 @@
  */
 
 import { Volume2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { SectionLabel } from '@/components/SectionLabel';
 import { useLocale } from '@/i18n/LocaleProvider';
 import { formatDay, formatNumber } from '@/i18n/format';
@@ -112,11 +113,25 @@ export function MandiRatesCard() {
           live.length > 0 ? (
             <button
               type="button"
-              onClick={() =>
-                listening
-                  ? speech.stop()
-                  : speech.speak({ id: 'mandi', text: spoken, lang: speechTag })
-              }
+              onClick={() => {
+                if (listening) {
+                  speech.stop();
+                  return;
+                }
+                /* speak resolves only when the first part actually begins;
+                   a press the engine refuses resolves false and is answered
+                   here, not with silence. */
+                void speech
+                  .speak({ id: 'mandi', text: spoken, lang: speechTag })
+                  .then((started) => {
+                    if (!started) {
+                      toast.error(t('weather.listenUnavailable'));
+                    }
+                  })
+                  .catch(() => {
+                    toast.error(t('weather.listenUnavailable'));
+                  });
+              }}
               aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
               className="flex items-center gap-1 text-label text-brand"
             >

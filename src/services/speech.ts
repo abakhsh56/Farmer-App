@@ -11,16 +11,20 @@
  *
  * Three decisions are the module rather than plumbing:
  *
- * · **One voice, Saraiki first, and never a different language.** A voice is
- *   chosen for the farmer — a Saraiki voice first (`skr-PK`, `skr`, the app's
- *   `sk-PK`, or a name that says Saraiki), because the farmer's own preference
- *   is a native Saraiki speaker; then a voice for the text's own tag (`ur-PK`
- *   first, any `ur` voice after that). The words stay Urdu — the app has no
- *   Saraiki advice text yet — so a Saraiki voice reads Urdu advice. Where the
- *   device has no voice for either, the right answer is silence the caller can
- *   answer, not the platform's default: the default made the pill always
- *   answer, and on a device with no Urdu it answered in English. Urdu is read
- *   by a Saraiki or Urdu voice, or not at all.
+ * · **The natural voice first, the browser's voice as the fallback.** The
+ *   farmer asked for a real voice, not a robotic one, so Piper's Urdu neural
+ *   voice (`services/piper.ts`) reads first — its model fetched from the
+ *   public Piper release, no key and no account — and the browser's own
+ *   speech is only the fallback when Piper cannot run. The fallback still
+ *   honours the farmer's preference: a Saraiki voice first (`skr-PK`, `skr`,
+ *   the app's `sk-PK`, or a name that says Saraiki), because the farmer's own
+ *   preference is a native Saraiki speaker; then a voice for the text's own
+ *   tag (`ur-PK` first, any `ur` voice after that). The words stay Urdu —
+ *   the app has no Saraiki advice text yet — so a Saraiki voice reads Urdu
+ *   advice. Where the device has no voice for either, the right answer is
+ *   silence the caller can answer, not the platform's default: the default
+ *   made the pill always answer, and on a device with no Urdu it answered in
+ *   English. Urdu is read by a Saraiki or Urdu voice, or not at all.
  *
  * · **The text arrives whole; the platform gets it in parts.** Engines drop long
  *   utterances mid-sentence, so the words are split at sentence ends and queued.
@@ -37,9 +41,8 @@
  *   language), iOS ships none, and Android only sometimes. Measured on this
  *   machine, a device with three en-US voices reads an Urdu sentence with an
  *   English voice — the farmer hears English, which is the exact failure this
- *   file exists to prevent. So the Urdu audio is requested and played through an
- *   `<audio>` element instead, which needs no key and is not blocked the way a
- *   cross-origin `fetch` would be.
+ *   file exists to prevent. So the Urdu audio is made by Piper's neural voice
+ *   (`services/piper.ts`) and played through an `<audio>` element instead.
  *
  *   A keyless web endpoint was tried for this and does not work from a page, and
  *   the file records it so the next person does not spend the same hour on it:
@@ -47,17 +50,13 @@
  *   own headers it answers **404 `text/html`**, which Chrome then refuses as
  *   `ERR_BLOCKED_BY_ORB` — verified in this app's own network log.
  *
- *   The offline answer — an Urdu model running on the device — was investigated
- *   and is real but not finished, and this records exactly where it stops: Piper
- *   does publish an Urdu voice (`rhasspy/piper-voices` → `ur/ur_PK` →
- *   `ur_PK-aegis_female-medium`, 63 MB), and a browser runtime for it exists. The
- *   ready-made package is `@mintplex-labs/piper-tts-web`, but it can only fetch
- *   voices from a fixed mirror, and **that mirror contains no Urdu at all**
- *   (`"ur does not exist on main"`), so pointing it at `ur_PK-…` asks for
- *   `…/main/undefined.json` and gets a 404 — measured in this app's own network
- *   log. Finishing it therefore means running `@diffusionstudio/piper-wasm`
- *   directly against a model we host ourselves, which is a day's work and a 63 MB
- *   asset, not a configuration change.
+ *   Piper is the voice that runs: its Urdu model (`ur_PK-aegis_female-medium`,
+ *   63 MB) is fetched from the public Piper voices release, and the phonemiser
+ *   and the model's configuration are served from this app's own origin. There
+ *   is no Saraiki Piper model (checked: no `skr` in the release), so the Urdu
+ *   voice reads the Urdu advice. A cloud neural voice was considered and set
+ *   aside: it sounds human, but it needs an API key the farmer has no time to
+ *   provide, and the standing rule is free resources with no key.
  *
  * The speech recogniser is *not* here: `ScanScreen` owns that, because it is a
  * control on a screen rather than a capability of the app.
@@ -198,7 +197,42 @@ export type SpeakOptions = {
   onStart?: () => void;
   /** Fired when the last part ends, or when the engine refuses a part. */
   onEnd?: () => void;
+  /**
+   * Fired when the first part is refused before it ever begins — the
+   * engine has no voice it will use, or it rejected the utterance. This
+   * is the signal that queueing succeeded but speaking did not start,
+   * which the boolean return alone cannot tell apart.
+   */
+  onStartFailed?: () => void;
 };
+
+/**
+ * The voice list, waiting briefly for it to arrive when it is empty.
+ *
+ * The list is delivered late: the first read is often empty and the real
+ * list arrives on `voiceschanged`. Reading it once and declaring "no voice"
+ * is how a press on a device that has one fails before it is tried. Waits
+ * at most a second; a device with no voices at all still resolves, with an
+ * empty list, so the caller can answer that instead of hanging.
+ */
+export function waitForVoices(timeoutMs = 1000): Promise<readonly SpeechSynthesisVoice[]> {
+  const target = engine();
+  if (!target) return Promise.resolve([]);
+  const current = target.synth.getVoices();
+  if (current.length > 0) return Promise.resolve(current);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      target.synth.removeEventListener('voiceschanged', onChange);
+      resolve(target.synth.getVoices());
+    };
+    const onChange = () => finish();
+    target.synth.addEventListener('voiceschanged', onChange);
+    setTimeout(finish, timeoutMs);
+  });
+}
 
 /* --------------------------------------------------------------------------
    The voice the app carries — Piper's Urdu model, run on this device.
@@ -333,10 +367,14 @@ export function warmAppVoice(text: string): void {
 }
 
 /**
- * Reads the text aloud. Returns false when it could not be started at all, which
- * is the caller's cue that the control has nothing to do.
+ * Reads the text aloud. Returns false only when it could not even be
+ * queued — no engine, or no words. Queueing is not starting: whether the
+ * first part actually begins is reported through `onStart`, and a refusal
+ * before it begins through `onStartFailed`. A caller that treats the
+ * boolean as "speaking" will show a speaking state for a press the engine
+ * refused, which is how a tap that does nothing looks like it worked.
  */
-export function speakText(text: string, { lang, voice, onStart, onEnd }: SpeakOptions): boolean {
+export function speakText(text: string, { lang, voice, onStart, onEnd, onStartFailed }: SpeakOptions): boolean {
   const target = engine();
   if (!target) return false;
 
@@ -347,18 +385,48 @@ export function speakText(text: string, { lang, voice, onStart, onEnd }: SpeakOp
      two readings of the same advice. */
   target.synth.cancel();
 
+  let started = false;
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    onEnd?.();
+  };
+  const failToStart = () => {
+    if (started || finished) return;
+    finished = true;
+    /* Clear the parts still waiting, so a refused first part does not leave
+       the rest queued behind it. */
+    target.synth.cancel();
+    onStartFailed?.();
+    onEnd?.();
+  };
+
   parts.forEach((part, index) => {
     const utterance = new target.Utterance(part);
     utterance.lang = lang;
     if (voice) utterance.voice = voice;
     utterance.rate = RATE;
 
-    if (index === 0 && onStart) utterance.onstart = () => onStart();
-    if (index === parts.length - 1) {
-      utterance.onend = () => onEnd?.();
-      /* `onerror` is the only signal a refused voice gives, and without it the
-         pill would stay stuck in its speaking state for ever. */
-      utterance.onerror = () => onEnd?.();
+    const isFirst = index === 0;
+    const isLast = index === parts.length - 1;
+    if (isFirst) {
+      utterance.onstart = () => {
+        started = true;
+        onStart?.();
+      };
+      /* An error before the first part begins is a refusal, not an ending;
+         after speaking has begun it is an ending like any other. */
+      utterance.onerror = () => {
+        if (!started) failToStart();
+        else finish();
+      };
+    }
+    if (isLast) {
+      utterance.onend = () => finish();
+      if (!isFirst) {
+        utterance.onerror = () => finish();
+      }
     }
 
     target.synth.speak(utterance);
