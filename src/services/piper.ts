@@ -9,14 +9,25 @@
  * on such a device is to read Urdu script with an English voice, which is the
  * failure the Listen pills exist to avoid.
  *
- * So the voice is bundled instead: Piper's `ur_PK` model, phonemised by
- * espeak-ng and run by onnxruntime, all served from this app's own origin. No
- * key, no account, no request to anyone, and it works with the network off —
- * which is the only kind of speech worth having in a field with no signal.
+ * So the voice is carried instead of borrowed: Piper's `ur_PK` model,
+ * phonemised by espeak-ng and run by onnxruntime. No key, no account, and
+ * no request to a vendor that charges — the model is the public Piper
+ * release, fetched once and kept for the session. The phonemiser and the
+ * model's configuration are served from this app's own origin; only the
+ * 63 MB model itself comes from elsewhere, because GitHub refuses a file
+ * that large through its API and it is therefore not in the repo.
  *
  * Everything here is loaded on first press and kept: the model is 63 MB and the
  * phonemiser's data is 18 MB, so a farmer who never presses Listen never pays
- * for either, and one who does pays once per session.
+ * for either, and one who does pays once per session. A first press needs the
+ * network for the model; after that the voice is in memory, and a repeat press
+ * costs nothing. The browser's own voice is the fallback when the model cannot
+ * be reached — see `SpeechProvider`.
+ *
+ * There is no Saraiki voice to prefer here: Piper publishes no Saraiki model
+ * (checked: no `skr` in the Piper voices release), so the Urdu voice reads
+ * the Urdu advice. A native Saraiki speaker speaking Urdu is the voice the
+ * farmer asked for, and this is the closest a free voice gets to it.
  *
  * The protocol is Piper's own, not invented here: text → phoneme ids →
  * `input`/`input_lengths`/`scales` into the voice → float PCM → WAV.
@@ -37,10 +48,19 @@ type PhonemizerFactory = (options: {
 
 type PhonemizerWindow = Window & { createPiperPhonemize?: PhonemizerFactory };
 
-/** Everything the voice needs, all under the app's own origin. */
+/** The phonemiser and the model's configuration, served from this app's own origin. */
 const BASE = '/piper';
 const VOICE = 'ur_PK-aegis_female-medium';
-const MODEL_URL = `${BASE}/${VOICE}.onnx`;
+/*
+ * The model itself — 63 MB, which GitHub refuses through its API, so it is
+ * not in the repo. It comes from the public Piper voices release on Hugging
+ * Face (no key, no account): the same file the repo's `public/piper` copy
+ * came from, byte for byte. The address is the release's stable `resolve`
+ * link, which redirects to its CDN; the CDN answers cross-origin requests,
+ * so a page on this app's origin can fetch it.
+ */
+const MODEL_URL =
+  'https://huggingface.co/rhasspy/piper-voices/resolve/main/ur/ur_PK/aegis_female/medium/ur_PK-aegis_female-medium.onnx';
 const CONFIG_URL = `${BASE}/${VOICE}.onnx.json`;
 const PIPER_WASM = `${BASE}/piper_phonemize.wasm`;
 const PIPER_DATA = `${BASE}/piper_phonemize.data`;
