@@ -11,12 +11,16 @@
  *
  * Three decisions are the module rather than plumbing:
  *
- * · **One voice, matched to the language, and never a different language.** A
- *   voice is chosen for the farmer's own tag — `ur-PK` first, any `ur` voice
- *   after that. Where the device has no voice for the language the app's own
- *   Urdu voice reads it, and there is no third step: the platform's default made
- *   the pill always answer, and on a device with no Urdu it answered in English.
- *   Urdu is read by an Urdu voice or not at all.
+ * · **One voice, Saraiki first, and never a different language.** A voice is
+ *   chosen for the farmer — a Saraiki voice first (`skr-PK`, `skr`, the app's
+ *   `sk-PK`, or a name that says Saraiki), because the farmer's own preference
+ *   is a native Saraiki speaker; then a voice for the text's own tag (`ur-PK`
+ *   first, any `ur` voice after that). The words stay Urdu — the app has no
+ *   Saraiki advice text yet — so a Saraiki voice reads Urdu advice. Where the
+ *   device has no voice for either, the right answer is silence the caller can
+ *   answer, not the platform's default: the default made the pill always
+ *   answer, and on a device with no Urdu it answered in English. Urdu is read
+ *   by a Saraiki or Urdu voice, or not at all.
  *
  * · **The text arrives whole; the platform gets it in parts.** Engines drop long
  *   utterances mid-sentence, so the words are split at sentence ends and queued.
@@ -98,8 +102,19 @@ export function baseLanguage(tag: string): string {
 
 /**
  * The voice that should read this language, or `undefined` when the device has
- * none. An exact tag wins over the same language in another region — `ur-PK`
- * over `ur-IN` — because the two differ in the words the voice gets right.
+ * none.
+ *
+ * Saraiki first, always — the farmer's own voice preference is a native
+ * Saraiki speaker. A Saraiki voice is matched by its tag (`skr-PK`, `skr`, and
+ * the app's own Saraiki tag `sk-PK`) or by its name, and it reads the Urdu
+ * advice the app has: there is no Saraiki advice text to read yet (the Saraiki
+ * catalogue is navigation only), so the voice is Saraiki and the words stay
+ * Urdu. Only when the device has no Saraiki voice at all does the requested
+ * tag win — an exact tag over the same language in another region (`ur-PK`
+ * over `ur-IN`), because the two differ in the words the voice gets right. A
+ * voice for another language is never a substitute: without a Saraiki or
+ * matching voice the answer is `undefined`, and the caller answers that
+ * instead of silence.
  */
 export function pickVoice(
   voices: readonly SpeechSynthesisVoice[],
@@ -107,6 +122,15 @@ export function pickVoice(
 ): SpeechSynthesisVoice | undefined {
   const wanted = tag.toLowerCase();
   const base = baseLanguage(tag);
+  /* Saraiki first: the farmer's preferred voice. `skr` is the language's own
+     code; `sk-PK` is the tag the app's Saraiki locale carries. Bare `sk` is
+     deliberately not matched — it is Slovak's code, not Saraiki's. */
+  const saraiki =
+    voices.find((voice) => voice.lang.toLowerCase() === 'skr-pk') ??
+    voices.find((voice) => baseLanguage(voice.lang) === 'skr') ??
+    voices.find((voice) => voice.lang.toLowerCase() === 'sk-pk') ??
+    voices.find((voice) => voice.name.toLowerCase().includes('saraiki'));
+  if (saraiki) return saraiki;
   return (
     voices.find((voice) => voice.lang.toLowerCase() === wanted) ??
     voices.find((voice) => baseLanguage(voice.lang) === base) ??

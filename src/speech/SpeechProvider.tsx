@@ -31,12 +31,14 @@ import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
  * that works, so an empty list is `unknown`, not `absent`.
  *
  * Speaking never refuses for want of a matching voice. The voice is the
- * browser's own text-to-speech, in Urdu: a matched Urdu voice when the device
- * has one, and otherwise the engine's best voice for the language tag — which
- * on a phone with Urdu installed is the Urdu voice. There is no second voice
- * to fall back to: the carried Piper model is excluded (63 MB, not in the
- * repo), so a press that cannot speak at all — no speech engine, or no words
- * — returns false, and the caller answers it instead of silence.
+ * browser's own text-to-speech, Saraiki first and Urdu after: a native Saraiki
+ * voice when the device has one — reading the Urdu advice the app has, since
+ * there is no Saraiki advice text yet — and otherwise a matched Urdu voice,
+ * and otherwise the engine's best voice for the language tag — which on a
+ * phone with Urdu installed is the Urdu voice. There is no second voice to
+ * fall back to: the carried Piper model is excluded (63 MB, not in the repo),
+ * so a press that cannot speak at all — no speech engine, or no words —
+ * returns false, and the caller answers it instead of silence.
  */
 
 export type SpeechValue = {
@@ -110,12 +112,13 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
       const allVoices = liveVoices.length > 0 ? liveVoices : voices;
       const voice = pickVoice(allVoices, lang);
       /* Built-in text-to-speech is the voice now: the carried Piper model is
-         excluded, so there is no second voice to fall back to. A matched Urdu
-         voice is used when the device has one; without one the utterance still
-         goes to the engine with the language set, and the engine picks its best
-         voice for it — which on a phone with Urdu installed is the Urdu voice.
-         speakText reports whether it started, so a press that cannot speak is
-         a false the caller can answer, not silence. */
+         excluded, so there is no second voice to fall back to. A Saraiki voice
+         is used first when the device has one, then a matched Urdu voice;
+         without either the utterance still goes to the engine with the
+         language set, and the engine picks its best voice for it — which on a
+         phone with Urdu installed is the Urdu voice. speakText reports whether
+         it started, so a press that cannot speak is a false the caller can
+         answer, not silence. */
       const started = speakText(text, { lang, voice, onEnd });
       setSpeaking(started ? id : null);
       return started;
