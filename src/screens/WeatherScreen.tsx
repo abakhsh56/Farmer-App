@@ -161,7 +161,7 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
           type="button"
           onClick={weather.retry}
           aria-label={t('weather.refresh')}
-          className="grid size-10 shrink-0 place-items-center rounded-full bg-white/40 text-foreground motion-safe:transition-transform motion-safe:active:scale-95 dark:bg-white/10"
+          className="grid size-10 shrink-0 place-items-center rounded-full text-foreground motion-safe:transition-transform motion-safe:active:scale-95"
         >
           <RefreshCw
             className={`size-4 ${weather.refreshing ? 'animate-spin' : ''}`}
