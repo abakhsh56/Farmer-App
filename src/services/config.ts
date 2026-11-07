@@ -136,9 +136,7 @@ function build(): ServiceConfig {
         requestedWeather === 'development' ||
         requestedWeather === 'supabase'
           ? requestedWeather
-          : backendLive
-            ? 'supabase'
-            : 'development',
+          : 'open-meteo',
     },
     aiEndpoint: { url: aiEndpoint, configured: Boolean(aiEndpoint) },
     otpEndpoint: { url: otpEndpoint, configured: Boolean(otpEndpoint) },
