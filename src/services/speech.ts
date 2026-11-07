@@ -1,23 +1,27 @@
 /**
- * The device's own voice.
+ * The voice that reads the advice aloud.
  *
  * The weather card and the scan verdict each carry a `Listen` pill, and spoken
  * advice is the whole point of them: the sentence under that pill — when to
  * spray, what is wrong with the plant — is the one a farmer acts on in a field,
  * and often without reading it comfortably. This module is the piece the app was
- * missing, and it is deliberately thin: it wraps the platform's speech synthesis
- * and nothing else, so reading a sentence that is already on screen costs no
- * provider, no key and no network.
+ * missing, and it is deliberately thin: it turns text that is already on screen
+ * into sound, through whichever voice can actually say it in Urdu.
  *
  * Three decisions are the module rather than plumbing:
  *
- * · **The natural voice first, the browser's voice as the fallback.** The
- *   farmer asked for a real voice, not a robotic one, so Piper's Urdu neural
- *   voice (`services/piper.ts`) reads first — its model fetched from the
- *   public Piper release, no key and no account — and the browser's own
- *   speech is only the fallback when Piper cannot run. The fallback still
- *   honours the farmer's preference: a Saraiki voice first (`skr-PK`, `skr`,
- *   the app's `sk-PK`, or a name that says Saraiki), because the farmer's own
+ * · **The cloud voice first, the carried voice second, the browser's voice
+ *   last.** The farmer asked for a real voice, not a robotic one, and for it
+ *   to answer fast on a village connection. So the cloud voice reads first:
+ *   Google Cloud Text-to-Speech, made on the server (`supabase/functions/
+ *   speak`), a few kilobytes of MP3 per sentence — no 63 MB model to
+ *   download, no key on the device. When the server voice cannot run, the
+ *   app's own Urdu voice reads instead — Piper's neural voice
+ *   (`services/piper.ts`), its model fetched from the public Piper release,
+ *   no key and no account — and only when that cannot run either does the
+ *   browser's own speech answer. The browser fallback still honours the
+ *   farmer's preference: a Saraiki voice first (`skr-PK`, `skr`, the app's
+ *   `sk-PK`, or a name that says Saraiki), because the farmer's own
  *   preference is a native Saraiki speaker; then a voice for the text's own
  *   tag (`ur-PK` first, any `ur` voice after that). The words stay Urdu —
  *   the app has no Saraiki advice text yet — so a Saraiki voice reads Urdu
@@ -41,8 +45,9 @@
  *   language), iOS ships none, and Android only sometimes. Measured on this
  *   machine, a device with three en-US voices reads an Urdu sentence with an
  *   English voice — the farmer hears English, which is the exact failure this
- *   file exists to prevent. So the Urdu audio is made by Piper's neural voice
- *   (`services/piper.ts`) and played through an `<audio>` element instead.
+ *   file exists to prevent. So the Urdu audio is made on the server and played
+ *   through an `<audio>` element instead, and only when the server cannot be
+ *   reached does the carried voice take over.
  *
  *   A keyless web endpoint was tried for this and does not work from a page, and
  *   the file records it so the next person does not spend the same hour on it:
@@ -50,17 +55,21 @@
  *   own headers it answers **404 `text/html`**, which Chrome then refuses as
  *   `ERR_BLOCKED_BY_ORB` — verified in this app's own network log.
  *
- *   Piper is the voice that runs: its Urdu model (`ur_PK-aegis_female-medium`,
- *   63 MB) is fetched from the public Piper voices release, and the phonemiser
- *   and the model's configuration are served from this app's own origin. There
- *   is no Saraiki Piper model (checked: no `skr` in the release), so the Urdu
- *   voice reads the Urdu advice. A cloud neural voice was considered and set
- *   aside: it sounds human, but it needs an API key the farmer has no time to
- *   provide, and the standing rule is free resources with no key.
+ *   The cloud voice is the one that runs: Google Cloud Text-to-Speech
+ *   (`ur-PK-Wavenet-A`), made by the `speak` Edge Function, whose key lives
+ *   only on the server. There is no Saraiki voice from Google either
+ *   (checked: no `skr` in its list), so the Urdu voice reads the Urdu
+ *   advice. Piper is the fallback now, not the voice: its Urdu model
+ *   (`ur_PK-aegis_female-medium`, 63 MB) is fetched from the public Piper
+ *   voices release only when the server voice cannot run, and the phonemiser
+ *   and the model's configuration are served from this app's own origin.
  *
  * The speech recogniser is *not* here: `ScanScreen` owns that, because it is a
  * control on a screen rather than a capability of the app.
  */
+
+import { serviceConfig } from './config';
+import { splitForVoice } from './voiceParts';
 
 /** What one utterance may carry before engines start dropping its tail. */
 const CHUNK_CHARS = 180;
@@ -275,53 +284,51 @@ function freeVoiceUrls(): void {
   voiceUrls = [];
 }
 
+export type AudioPartOptions = {
+  /**
+   * Resumes a reading that was stopped: parts before this index are not
+   * made and not played, so the reading continues from the sentence it
+   * was on instead of starting again from the beginning.
+   */
+  fromPart?: number;
+  /**
+   * Fired when a part begins playing, with its absolute index in the text.
+   * The caller records it as the resume position.
+   */
+  onPartStart?: (index: number) => void;
+  /**
+   * Fired when the last part ends naturally — the reading ran to its end,
+   * not a stop. The caller uses it to forget a resume position, so a
+   * fresh press starts from the beginning.
+   */
+  onComplete?: () => void;
+};
+
 /**
- * Reads the text with the app's own Urdu voice, part by part.
+ * Plays audio parts in order through the one shared element.
  *
- * Resolves true once the first part is playing, false when nothing was made at
- * all. The caller does *not* hand Urdu to another voice when that happens — it
- * says nothing and lets the next press bring the model up — so a `false` here
- * means `piper.ts` has already logged the real cause.
+ * This is the one voice at a time: a newer press replaces the part still
+ * being heard, because there is a single element and a single token, and a
+ * press that arrives while parts are still being made bumps the token so
+ * the parts it made are dropped rather than played late. Both voices that
+ * play audio — the cloud voice and the carried Piper voice — go through
+ * here, so a press that starts on one and falls back to the other cannot
+ * leave the first talking over the second.
  *
- * **Why one part at a time.** The model runs on this thread, and it used to make
- * the whole passage before handing over a single WAV: 13 seconds of audio for the
- * weather advice, and the farmer heard none of it until the last sentence was
- * built. Now the first sentence plays while the rest is being made, which is what
- * makes a press feel answered — the wait is one sentence, not one passage. The
- * parts are handed over in reading order and played back to back, and each break
- * lands on a sentence end, so the joins are heard as pauses rather than seams.
- *
- * The first call of a page load also pays for 63 MB of model and 18 MB of
- * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
- * offers a warm-up for a finger that is already on the pill.
+ * `produce` makes the parts and hands each one over the moment it exists,
+ * in reading order; the first part plays while the rest are still being
+ * made, which is what makes a press feel answered — the wait is one
+ * sentence, not one passage. Resolves true once the first part is playing,
+ * false when nothing was made at all.
  */
-export async function speakWithAppVoice(
-  text: string,
-  onEnd?: () => void,
-  options?: {
-    /**
-     * Resumes a reading that was stopped: parts before this index are not
-     * made and not played, so the reading continues from the sentence it
-     * was on instead of starting again from the beginning.
-     */
-    fromPart?: number;
-    /**
-     * Fired when a part begins playing, with its absolute index in the text.
-     * The caller records it as the resume position.
-     */
-    onPartStart?: (index: number) => void;
-    /**
-     * Fired when the last part ends naturally — the reading ran to its end,
-     * not a stop. The caller uses it to forget a resume position, so a
-     * fresh press starts from the beginning.
-     */
-    onComplete?: () => void;
-  },
+async function playAudioParts(
+  produce: (emit: (audio: Blob, index: number) => void, fromPart: number) => Promise<boolean>,
+  onEnd: (() => void) | undefined,
+  options?: AudioPartOptions,
 ): Promise<boolean> {
   if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
   const token = ++voiceToken;
 
-  const { synthesiseUrduSpeech } = await import('./piper');
   const element = (voicePlayer ??= new window.Audio());
 
   /* One voice at a time: a newer press replaces the part still being heard. */
@@ -331,7 +338,7 @@ export async function speakWithAppVoice(
   freeVoiceUrls();
 
   const queue: { url: string; index: number }[] = [];
-  let synthesisFinished = false;
+  let productionFinished = false;
   let busy = false;
   let handed = 0;
   let answered = false;
@@ -352,7 +359,12 @@ export async function speakWithAppVoice(
 
     const next = queue.shift();
     if (!next) {
-      if (synthesisFinished) {
+      if (productionFinished) {
+        /* Nothing was ever heard and there is nothing left to hear: the
+           voice did not start, and a promise that never settles would
+           leave the pill in its speaking state forever. A part that played
+           has already answered true, so this only fires when none did. */
+        if (!answered) answer(false);
         onEnd?.();
         /* The last part ended on its own: the reading ran to its end, so a
            fresh press starts from the beginning. A stop never reaches here —
@@ -383,8 +395,7 @@ export async function speakWithAppVoice(
     );
   };
 
-  const spoken = await synthesiseUrduSpeech(
-    text,
+  const produced = await produce(
     (audio, index) => {
       /* The farmer stopped, or pressed again, while this part was being made. */
       if (token !== voiceToken) return;
@@ -397,11 +408,11 @@ export async function speakWithAppVoice(
     options?.fromPart ?? 0,
   );
 
-  synthesisFinished = true;
+  productionFinished = true;
   if (token !== voiceToken) {
     /* A newer press owns the voice now, and it must not have its state cleared. */
     answer(true);
-  } else if (!spoken && handed === 0) {
+  } else if (!produced && handed === 0) {
     answer(false);
   }
   pump();
@@ -410,32 +421,123 @@ export async function speakWithAppVoice(
 }
 
 /**
- * Starts getting the app's Urdu voice ready without pressing anything: the model
- * arrives, and the sentence the farmer is about to hear is made in advance.
+ * Reads the text with the app's own Urdu voice, part by part.
  *
- * `text` is the advice the pill would read, which is known before it is pressed.
- * Wired to the `Listen` pill's hover and focus — see `SpeechProvider.warm`.
+ * Resolves true once the first part is playing, false when nothing was made at
+ * all. The caller does *not* hand Urdu to another voice when that happens — it
+ * says nothing and lets the next press bring the model up — so a `false` here
+ * means `piper.ts` has already logged the real cause.
+ *
+ * **Why one part at a time.** The model runs on this thread, and it used to make
+ * the whole passage before handing over a single WAV: 13 seconds of audio for the
+ * weather advice, and the farmer heard none of it until the last sentence was
+ * built. Now the first sentence plays while the rest is being made, which is what
+ * makes a press feel answered — the wait is one sentence, not one passage. The
+ * parts are handed over in reading order and played back to back, and each break
+ * lands on a sentence end, so the joins are heard as pauses rather than seams.
+ *
+ * The first call of a page load also pays for 63 MB of model and 18 MB of
+ * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
+ * offers a warm-up for a finger that is already on the pill.
  */
-export function warmAppVoice(text: string): void {
-  void import('./piper')
-    .then((piper) => piper.warmUrduVoice(text))
-    .catch(() => undefined);
+export async function speakWithAppVoice(
+  text: string,
+  onEnd?: () => void,
+  options?: AudioPartOptions,
+): Promise<boolean> {
+  if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
+
+  const { synthesiseUrduSpeech } = await import('./piper');
+  return playAudioParts(
+    (emit, fromPart) => synthesiseUrduSpeech(text, emit, fromPart),
+    onEnd,
+    options,
+  );
+}
+
+/* --------------------------------------------------------------------------
+   The cloud voice — Google Cloud Text-to-Speech, made on the server.
+   -------------------------------------------------------------------------- */
+
+/**
+ * The cloud voice endpoint, or null when the backend is not configured.
+ *
+ * The URL is derived from the Supabase URL (`services/config.ts`), so there
+ * is no separate variable to forget on a deployment. Whether the voice
+ * itself works is the server's key, which the client cannot see — a
+ * function that answers 503 is a voice that is not configured, and the
+ * caller falls back rather than failing the press.
+ */
+export function cloudVoiceEndpoint(): string | null {
+  return serviceConfig.speakEndpoint.url;
 }
 
 /**
- * Starts getting the app's Urdu voice ready in the background, without
- * pressing anything and without knowing the words yet: the model arrives so
- * a press finds it already there.
+ * One sentence of cloud audio, or null when it could not be made.
  *
- * Called when the home screen opens — a phone has no hover, so the pill's
- * hover/focus warm-up never fires there, and the first press would otherwise
- * begin with the 63 MB download on a slow connection. Nothing is said, and
- * the pill shows the voice arriving (see `SpeechProvider.voiceLoading`).
+ * A part is a sentence under 200 characters, so the MP3 is a few kilobytes
+ * — the whole reason this voice exists, against a 63 MB model download on a
+ * slow connection. Any failure is a null, never a throw: the caller falls
+ * back to the voice the app carries, and a farmer on a bad connection hears
+ * the advice a little later rather than not at all.
  */
-export function preloadAppVoice(): void {
-  void import('./piper')
-    .then((piper) => piper.warmUrduVoice())
-    .catch(() => undefined);
+export async function fetchCloudAudio(text: string): Promise<Blob | null> {
+  const endpoint = cloudVoiceEndpoint();
+  if (!endpoint) return null;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) return null;
+    const audio = await response.blob();
+    return audio.size > 0 ? audio : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads the text with the cloud voice, part by part.
+ *
+ * The same shape as `speakWithAppVoice` — the provider tries this first,
+ * and a `false` falls through to the voice the app carries, then to the
+ * browser's own voice. A part that cannot be fetched is skipped rather
+ * than left as a silence; a reading only fails when no part at all could
+ * be made, which is what `false` means.
+ *
+ * The parts are the same sentence boundaries Piper uses
+ * (`services/voiceParts.ts: splitForVoice`), so a reading stopped on one voice and
+ * resumed on the other continues from the same sentence — the resume
+ * position is an index into the text, and two splitters would make it
+ * point at two different sentences.
+ */
+export async function speakWithCloudVoice(
+  text: string,
+  onEnd?: () => void,
+  options?: AudioPartOptions,
+): Promise<boolean> {
+  if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
+  if (!cloudVoiceEndpoint()) return false;
+
+  return playAudioParts(
+    async (emit, fromPart) => {
+      const parts = splitForVoice(text);
+      let made = 0;
+      for (let index = fromPart; index < parts.length; index += 1) {
+        const part = parts[index];
+        if (part === undefined) continue;
+        const audio = await fetchCloudAudio(part);
+        if (!audio) continue;
+        made += 1;
+        emit(audio, index);
+      }
+      return made > 0;
+    },
+    onEnd,
+    options,
+  );
 }
 
 /**

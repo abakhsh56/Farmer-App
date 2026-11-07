@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { pickVoice, speakText, waitForVoices } from './speech';
+import { serviceConfig } from './config';
+import {
+  fetchCloudAudio,
+  pickVoice,
+  speakText,
+  speakWithCloudVoice,
+  waitForVoices,
+} from './speech';
 
 /**
  * The voice the app reads with: Saraiki first, Urdu after.
@@ -94,6 +101,161 @@ function removeSpeechEngine() {
   delete (window as unknown as Record<string, unknown>).speechSynthesis;
   delete (window as unknown as Record<string, unknown>).SpeechSynthesisUtterance;
 }
+
+/**
+ * The cloud voice's endpoint, set for one test and restored after it.
+ * `serviceConfig` is a plain object, not frozen, so a test can point it at a
+ * fake server — and the real one is `null` in this test environment, which is
+ * how the "no endpoint" path is exercised.
+ */
+const CLOUD_URL = 'https://example.supabase.co/functions/v1/speak';
+let savedEndpoint = serviceConfig.speakEndpoint;
+
+function setCloudEndpoint(url: string | null): void {
+  serviceConfig.speakEndpoint = { url, configured: url !== null };
+}
+
+function restoreCloudEndpoint(): void {
+  serviceConfig.speakEndpoint = savedEndpoint;
+}
+
+/**
+ * A fake `<audio>` element. jsdom's `play()` is not implemented — it logs
+ * and returns `undefined`, so `play().then` throws — and `createObjectURL`
+ * is missing entirely. The stub plays a part and ends it on the next tick,
+ * so the reading moves to the next part.
+ */
+function installAudioElement() {
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const originalPlay = HTMLAudioElement.prototype.play;
+  URL.createObjectURL = () => 'blob:fake-audio';
+  URL.revokeObjectURL = (_url: string) => undefined;
+  HTMLAudioElement.prototype.play = function (this: HTMLAudioElement) {
+    queueMicrotask(() => {
+      this.onended?.(new Event('ended'));
+    });
+    return Promise.resolve();
+  };
+  return () => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    HTMLAudioElement.prototype.play = originalPlay;
+  };
+}
+
+/** A fake server that answers with MP3, or with the failure the test wants. */
+function installCloudServer(
+  answer: 'ok' | 'error' | 'empty' | 'throw' = 'ok',
+) {
+  const calls: string[] = [];
+  const fetchMock = vi.fn(async (url: string) => {
+    calls.push(url);
+    if (answer === 'throw') throw new Error('network down');
+    if (answer === 'error') return { ok: false, status: 503, blob: async () => new Blob() };
+    if (answer === 'empty') return { ok: true, status: 200, blob: async () => new Blob() };
+    return {
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(['fake-mp3'], { type: 'audio/mpeg' }),
+    };
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return { calls, fetchMock };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  restoreCloudEndpoint();
+});
+
+describe('fetchCloudAudio fetches one part as MP3', () => {
+  it('returns null with no endpoint and makes no request', async () => {
+    setCloudEndpoint(null);
+    const { fetchMock } = installCloudServer();
+    expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns the MP3 blob on success', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    const { calls } = installCloudServer();
+    const audio = await fetchCloudAudio('صاف آسمان ہے۔');
+    expect(audio).not.toBeNull();
+    expect(audio?.size).toBeGreaterThan(0);
+    expect(audio?.type).toBe('audio/mpeg');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe(CLOUD_URL);
+  });
+
+  it('returns null when the server answers with an error', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    const { fetchMock } = installCloudServer('error');
+    expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns null when the network fails', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    installCloudServer('throw');
+    expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
+  });
+
+  it('returns null when the server answers with empty audio', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    installCloudServer('empty');
+    expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
+  });
+});
+
+describe('speakWithCloudVoice reads with the server voice', () => {
+  it('returns false with no endpoint and makes no request', async () => {
+    setCloudEndpoint(null);
+    const { fetchMock } = installCloudServer();
+    expect(await speakWithCloudVoice('صاف آسمان ہے۔')).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns true once the first part is playing', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    installCloudServer();
+    const restoreAudio = installAudioElement();
+    const started: number[] = [];
+    let ended = false;
+    const result = await speakWithCloudVoice('صاف آسمان ہے۔ آج سپرے کرو۔', () => {
+      ended = true;
+    }, { onPartStart: (index) => started.push(index) });
+    expect(result).toBe(true);
+    /* The reading runs to its end: both parts play in order. */
+    await vi.waitFor(() => expect(ended).toBe(true));
+    expect(started).toEqual([0, 1]);
+    restoreAudio();
+  });
+
+  it('reads only from fromPart onward, with absolute indices', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    installCloudServer();
+    const restoreAudio = installAudioElement();
+    const text =
+      'The spray window opens at noon and closes before the evening rain arrives over the fields and roads. ' +
+      'Winds stay light through the afternoon, so the spray settles on the leaves where it should fall and stay.';
+    /* A resume from the second part: the first sentence is never made or
+       played, and the second keeps its own index. */
+    const resumed: number[] = [];
+    let ended = false;
+    const result = await speakWithCloudVoice(text, () => {
+      ended = true;
+    }, {
+      fromPart: 1,
+      onPartStart: (index) => resumed.push(index),
+    });
+    expect(result).toBe(true);
+    expect(resumed).toEqual([1]);
+    await vi.waitFor(() => expect(ended).toBe(true));
+    expect(resumed).toEqual([1]);
+    restoreAudio();
+  });
+});
 
 describe('pickVoice prefers a Saraiki voice', () => {
   it('takes an exact skr-PK voice over an Urdu one', () => {

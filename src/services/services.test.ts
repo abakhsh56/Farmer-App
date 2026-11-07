@@ -449,6 +449,7 @@ describe('registry selection', () => {
     aiEndpoint: { url: null, configured: false },
     otpEndpoint: { url: null, configured: false },
     dealerEndpoint: { url: null, configured: false },
+    speakEndpoint: { url: null, configured: false },
     weatherIngestEndpoint: { url: null, configured: false },
     analytics: { key: null, host: 'https://example.invalid', configured: false },
     // `auto` with no backend resolves to the fixture, which is what this build is.
@@ -460,6 +461,7 @@ describe('registry selection', () => {
     aiEndpoint: { url: 'https://example.supabase.co/functions/v1/ai', configured: true },
     otpEndpoint: { url: 'https://example.supabase.co/functions/v1/otp', configured: true },
     dealerEndpoint: { url: 'https://example.supabase.co/functions/v1/dealer', configured: true },
+    speakEndpoint: { url: 'https://example.supabase.co/functions/v1/speak', configured: true },
     weatherIngestEndpoint: { url: 'https://example.supabase.co/functions/v1/weather-ingest', configured: true },
     analytics: { key: 'phc_test', host: 'https://example.invalid', configured: false },
     // `auto` with a backend resolves to the normalised table.

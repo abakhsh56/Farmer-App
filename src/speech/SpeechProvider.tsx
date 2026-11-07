@@ -10,13 +10,12 @@ import {
 } from 'react';
 import {
   pickVoice,
-  preloadAppVoice,
   speakText,
   speakWithAppVoice,
+  speakWithCloudVoice,
   speechSupported,
   stopSpeaking,
   waitForVoices,
-  warmAppVoice,
 } from '@/services/speech';
 import {
   getVoiceLoadState,
@@ -40,14 +39,17 @@ import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
  * "this language cannot be read" before that arrives would grey out a control
  * that works, so an empty list is `unknown`, not `absent`.
  *
- * Speaking never refuses for want of a matching voice. The voice is Piper's
- * Urdu neural voice first — a real human-like voice, not the platform's
- * robotic one — loaded from the public Piper release (no key, no account;
- * see `services/piper.ts`). Only when that voice cannot run does the
+ * Speaking never refuses for want of a matching voice. The voice is the
+ * cloud voice first — Google Cloud Text-to-Speech, made on the server in a
+ * natural Urdu voice and sent as a few kilobytes of MP3 per sentence, so it
+ * answers fast on a village connection with no 63 MB model to download.
+ * When the server voice cannot run, the app's own Urdu neural voice reads
+ * instead — Piper, loaded from the public Piper release (no key, no account;
+ * see `services/piper.ts`) — and only when that cannot run either does the
  * browser's own text-to-speech answer: a native Saraiki voice when the
  * device has one — reading the Urdu advice the app has, since there is no
  * Saraiki advice text yet — and otherwise a matched Urdu voice. Without
- * either, the press is answered with a message, not with the engine's
+ * any of them, the press is answered with a message, not with the engine's
  * default voice: on a device with no Urdu voice that default reads Urdu
  * script in English, which is the failure this voice exists to avoid.
  *
@@ -57,8 +59,9 @@ import { useCapabilityRecorder } from '@/capability/CapabilityProvider';
  * therefore resolves true only when the first part actually begins, and
  * resolves false when it cannot start, so a press the engine refuses is
  * answered instead of looking like nothing happened. The same rule holds
- * for Piper: its first part playing is the start, and a model that cannot
- * be reached is a fall-through to the browser's voice, not a silence.
+ * for the cloud voice and for Piper: the first part playing is the start,
+ * and a voice that cannot be reached is a fall-through to the next voice,
+ * not a silence.
  */
 
 export type SpeechValue = {
@@ -71,9 +74,11 @@ export type SpeechValue = {
    * begins speaking — queueing is not starting, and a press the engine
    * refuses resolves false so the caller can answer it instead of silence.
    *
-   * Piper's Urdu neural voice is tried first, because it is the human-like
-   * one; the browser's own voice is the fallback when Piper cannot run.
-   * The browser's 2.5-second "has not begun" timeout applies only to the
+   * The cloud voice is tried first, because it is the fast one — a few
+   * kilobytes of MP3 per sentence from the server, no model to download.
+   * Piper's Urdu neural voice is the fallback when the server voice cannot
+   * run, and the browser's own voice is the fallback after that. The
+   * browser's 2.5-second "has not begun" timeout applies only to the
    * browser phase — Piper's first press downloads a 63 MB model, which no
    * fixed timeout can judge, and the pill shows its Stop state while it
    * loads so the farmer can cancel it.
@@ -83,25 +88,28 @@ export type SpeechValue = {
    * Starts getting the voice this language will be read in ready, without
    * speaking.
    *
-   * Called when a finger or a keyboard is already on the pill, so the press
-   * is not the moment the 63 MB model starts arriving — nor the moment the
-   * first sentence has to be made, because warming makes that one too. The
-   * browser's own voice needs no warming; only Piper does.
+   * Kept for the pill's hover and focus warm-up, and it does nothing now:
+   * the cloud voice needs no warming — a few kilobytes arrive when asked —
+   * and Piper is only a fallback, so warming it would start the 63 MB
+   * download the farmer complained about. The browser's own voice never
+   * needed warming either.
    */
   warm: (lang: string, text: string) => void;
   /**
    * Starts fetching the app's Urdu voice in the background, without speaking
    * and without knowing the words yet.
    *
-   * Called when the home screen opens: a phone has no hover, so the pill's
-   * hover/focus warm-up never fires there, and the first press would
-   * otherwise begin with the 63 MB download on a slow connection.
+   * Kept for the home screen's mount, and it does nothing now: the cloud
+   * voice needs no warm-up, and Piper is only a fallback — preloading it
+   * would start the 63 MB download on a slow connection, which is exactly
+   * what the farmer complained about.
    */
   preloadVoice: () => void;
   /**
    * True while the app's Urdu voice is still arriving. The pill shows this
    * instead of sitting silent — a press joins the download already running,
-   * and a load that fails is answered with the toast, not silence.
+   * and a load that fails is answered with the toast, not silence. It only
+   * matters when the cloud voice cannot run and Piper takes over.
    */
   voiceLoading: boolean;
   stop: () => void;
@@ -116,7 +124,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   );
   const [speaking, setSpeaking] = useState<string | null>(null);
   /* Whether the app's Urdu voice is still arriving. The pill shows this
-     instead of sitting silent while the 63 MB model downloads. */
+     instead of sitting silent while the 63 MB model downloads. It only
+     matters when the cloud voice cannot run and Piper takes over. */
   const [voiceLoading, setVoiceLoading] = useState<boolean>(
     () => getVoiceLoadState() === 'loading',
   );
@@ -164,23 +173,19 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     stopSpeaking();
   }, []);
 
-  const warm = useCallback(
-    (_lang: string, text: string) => {
-      /* The browser's own voice needs no warming — it answers the moment it
-         is asked. Piper does: the 63 MB model and the first sentence are
-         made now, so the press starts at the first sound instead of waiting
-         for a download. A failure here is silent on purpose — nothing was
-         asked for yet, and the press that follows reports the cause itself. */
-      if (text) warmAppVoice(text);
-    },
-    [],
-  );
+  const warm = useCallback((_lang: string, _text: string) => {
+    /* Nothing to warm: the cloud voice needs no warming — a few kilobytes
+       arrive when asked — and Piper is only a fallback, so warming it would
+       start the 63 MB download the farmer complained about. The browser's
+       own voice never needed warming either. Kept so the pill's hover and
+       focus warm-up has somewhere to call. */
+  }, []);
 
   const preloadVoice = useCallback(() => {
-    /* The model arrives in the background; nothing is said. A failure here
-       is silent on purpose — nothing was asked for yet, and the press that
-       follows reports the cause itself. */
-    preloadAppVoice();
+    /* Nothing to preload: the cloud voice needs no warm-up, and Piper is
+       only a fallback — preloading it would start the 63 MB download on a
+       slow connection, which is exactly what the farmer complained about.
+       Kept so the home screen's mount has somewhere to call. */
   }, []);
 
   const speak = useCallback<SpeechValue['speak']>(
@@ -226,10 +231,27 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
           };
 
           void (async () => {
-            /* Piper first: the natural neural voice. A model that cannot be
-               reached is a fall-through to the browser's voice, not a
-               silence — and a press stopped or superseded while the model
-               was loading is handled, not failed. */
+            /* The cloud voice first: a few kilobytes of MP3 per sentence
+               from the server, in a natural Urdu voice — no 63 MB model to
+               download on a village connection. A server that cannot be
+               reached is a fall-through to the carried voice, not a
+               silence — and a press stopped or superseded while the first
+               part was being fetched is handled, not failed. */
+            const cloudStarted = await speakWithCloudVoice(text, onEnd, {
+              fromPart,
+              onPartStart,
+              onComplete,
+            });
+            if (settled) return;
+            if (cloudStarted) {
+              settle(true);
+              return;
+            }
+
+            /* Piper next: the app's own Urdu neural voice. A model that
+               cannot be reached is a fall-through to the browser's voice,
+               not a silence — and a press stopped or superseded while the
+               model was loading is handled, not failed. */
             const piperStarted = await speakWithAppVoice(text, onEnd, {
               fromPart,
               onPartStart,

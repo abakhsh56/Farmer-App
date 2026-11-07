@@ -58,6 +58,17 @@ export type ServiceConfig = {
   aiEndpoint: { url: string | null; configured: boolean };
   otpEndpoint: { url: string | null; configured: boolean };
   dealerEndpoint: { url: string | null; configured: boolean };
+  /**
+   * The cloud voice (the `speak` Edge Function).
+   *
+   * Derived from the Supabase URL rather than a separate variable, because
+   * the function lives on this same project — a second variable is a second
+   * thing to forget on a deployment, and the "backend is not configured"
+   * failure this file exists to prevent came from exactly that. The URL is
+   * there whenever the backend is; whether the voice itself works is the
+   * server's key, which the client cannot see and the function reports.
+   */
+  speakEndpoint: { url: string | null; configured: boolean };
   /** The ingestion function. Server-side work the app triggers, never reads. */
   weatherIngestEndpoint: { url: string | null; configured: boolean };
   analytics: { key: string | null; host: string; configured: boolean };
@@ -110,6 +121,13 @@ function build(): ServiceConfig {
   const otpEndpoint = read('VITE_OTP_ENDPOINT');
   const dealerEndpoint = read('VITE_DEALER_ENDPOINT');
   const weatherIngestEndpoint = read('VITE_WEATHER_INGEST_ENDPOINT');
+  // The cloud voice lives on this same project, so its URL is the Supabase
+  // URL with the function path — no separate variable to forget. It is there
+  // whenever the backend is; whether the voice itself works is the server's
+  // key, which the function reports and the client cannot see.
+  const speakEndpoint = supabaseUrl
+    ? `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/speak`
+    : null;
   // `VITE_ANALYTICS_KEY` is the name to use: it describes what the key does
   // rather than which vendor issued it, and a one-word name is far harder to
   // mistype than a compound one — which is exactly how the original spelling
@@ -141,6 +159,7 @@ function build(): ServiceConfig {
     aiEndpoint: { url: aiEndpoint, configured: Boolean(aiEndpoint) },
     otpEndpoint: { url: otpEndpoint, configured: Boolean(otpEndpoint) },
     dealerEndpoint: { url: dealerEndpoint, configured: Boolean(dealerEndpoint) },
+    speakEndpoint: { url: speakEndpoint, configured: Boolean(speakEndpoint) },
     weatherIngestEndpoint: {
       url: weatherIngestEndpoint,
       configured: Boolean(weatherIngestEndpoint),

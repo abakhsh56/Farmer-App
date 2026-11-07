@@ -54,6 +54,13 @@ type PhonemizerFactory = (options: {
 
 type PhonemizerWindow = Window & { createPiperPhonemize?: PhonemizerFactory };
 
+/* The sentence splitter lives in its own module now: the cloud voice uses
+   the same boundaries, so a reading stopped on one voice and resumed on the
+   other continues from the same sentence. Re-exported here so existing
+   imports of `splitForVoice` from this module keep working. */
+import { splitForVoice } from './voiceParts';
+export { splitForVoice };
+
 /** The phonemiser and the model's configuration, served from this app's own origin. */
 const BASE = '/piper';
 const VOICE = 'ur_PK-aegis_female-medium';
@@ -70,16 +77,6 @@ const MODEL_URL =
 const CONFIG_URL = `${BASE}/${VOICE}.onnx.json`;
 const PIPER_WASM = `${BASE}/piper_phonemize.wasm`;
 const PIPER_DATA = `${BASE}/piper_phonemize.data`;
-
-/**
- * How much text one pass carries.
- *
- * Piper's own runtime uses 400; half that keeps the rhythm of a long sentence
- * steady and keeps the phonemiser's virtual file system small. The parts are
- * concatenated, so a split is inaudible apart from the pause it creates — which
- * lands on a sentence end, because that is where this splits.
- */
-const CHUNK_CHARS = 200;
 
 /**
  * How much slower the voice reads than the model's own pace.
@@ -296,49 +293,6 @@ function load(): Promise<PiperVoice> {
     });
 
   return voice;
-}
-
-/** Splits at sentence ends, so a part boundary is heard as a pause. */
-/**
- * The parts the text is made in, in the order they are read: one sentence each.
- *
- * This is a latency decision, and it is measured rather than assumed. Making the
- * voice blocks this thread (onnxruntime in the page) and it runs at roughly three
- * quarters of real time on the machine this was written on: the weather advice is
- * 14 seconds of audio and takes about 18 seconds of model work. Packing several
- * sentences into one part therefore does not save the wait, it *hides* it as a
- * silence — and that is what a farmer heard. Every sentence is made on its own, so
- * a part is finished in about the time the part before it takes to listen to, and
- * the gaps land exactly on the sentence ends, where a pause is expected anyway.
- *
- * Two things follow that are worth knowing before changing this: a longer part is
- * not faster overall, only later; and the voice is genuinely slower than speech
- * here, which is why the fixes that matter are a smaller model or multi-threaded
- * wasm (`numThreads` in `load` is 1 — threads need cross-origin isolation).
- *
- * A single sentence longer than `limit` is still broken at a space, because a
- * voice that starts mid-word is the one artefact a listener cannot account for.
- */
-export function splitForVoice(text: string, limit = CHUNK_CHARS): string[] {
-  const sentences = text
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(/(?<=[.!?۔؟])\s+/)
-    .filter((sentence) => sentence.length > 0);
-
-  const parts: string[] = [];
-  for (const sentence of sentences) {
-    let rest = sentence;
-    while (rest.length > limit) {
-      const space = rest.lastIndexOf(' ', limit);
-      const cut = space > 0 ? space : limit;
-      parts.push(rest.slice(0, cut));
-      rest = rest.slice(cut).trim();
-    }
-    if (rest.length > 0) parts.push(rest);
-  }
-
-  return parts;
 }
 
 /** Float PCM to a 16-bit mono WAV, which every browser plays without a decoder. */

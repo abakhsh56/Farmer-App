@@ -38,6 +38,7 @@ const BACKEND: ServiceConfig = {
   aiEndpoint: { url: null, configured: false },
   otpEndpoint: { url: null, configured: false },
   dealerEndpoint: { url: null, configured: false },
+  speakEndpoint: { url: 'https://project.supabase.co/functions/v1/speak', configured: true },
   weatherIngestEndpoint: { url: null, configured: false },
   analytics: { key: null, host: 'https://eu.i.posthog.com', configured: false },
   weather: { provider: 'supabase' },

@@ -1,20 +1,24 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { serviceConfig } from '@/services/config';
 import { SpeechProvider, useSpeech, type SpeechValue } from '@/speech/SpeechProvider';
 
 /**
- * The voice on a real phone: Piper's Urdu model is 63 MB and there is no
- * smaller Urdu model, so on a slow connection the first press used to sit in
- * silence while the download ran — and when it could not run, the browser's
- * fallback answered in English. These tests pin the three rules that fix it:
- * the model is fetched in the background when Home opens, the pill shows
- * that wait, and Urdu is read by a Saraiki or Urdu voice, or not at all.
+ * The voice on a real phone: the cloud voice answers first — a few kilobytes
+ * of MP3 per sentence from the server, so it is fast on a village connection
+ * with no 63 MB model to download. Piper's Urdu model is the fallback when
+ * the server voice cannot run, and the browser's own voice is the fallback
+ * after that. These tests pin the rules that fix the slow first press: the
+ * cloud voice is tried first, preload and warm start no download, the pill
+ * shows the wait when Piper is loading, and Urdu is read by a Saraiki or
+ * Urdu voice, or not at all.
  */
 
 const piperMock = vi.hoisted(() => ({
   loadState: 'idle' as 'idle' | 'loading' | 'ready',
   listeners: new Set<(state: 'idle' | 'loading' | 'ready') => void>(),
   warmCalls: 0,
+  synthesiseCalls: 0,
   synthesiseResult: false,
 }));
 
@@ -34,7 +38,10 @@ vi.mock('@/services/piper', () => ({
   warmUrduVoice: () => {
     piperMock.warmCalls += 1;
   },
-  synthesiseUrduSpeech: async () => piperMock.synthesiseResult,
+  synthesiseUrduSpeech: async () => {
+    piperMock.synthesiseCalls += 1;
+    return piperMock.synthesiseResult;
+  },
 }));
 
 /**
@@ -107,6 +114,59 @@ function removeSpeechEngine() {
   delete (window as unknown as Record<string, unknown>).SpeechSynthesisUtterance;
 }
 
+/**
+ * The cloud voice's endpoint, set for one test and restored after it.
+ * `serviceConfig` is a plain object, not frozen, so a test can point it at a
+ * fake server — and the real one is `null` in this test environment, which is
+ * how the existing tests exercise the fall-through to Piper and the browser.
+ */
+const CLOUD_URL = 'https://example.supabase.co/functions/v1/speak';
+const savedEndpoint = serviceConfig.speakEndpoint;
+
+function setCloudEndpoint(url: string | null): void {
+  serviceConfig.speakEndpoint = { url, configured: url !== null };
+}
+
+/**
+ * A fake `<audio>` element. jsdom's `play()` is not implemented — it logs
+ * and returns `undefined`, so `play().then` throws — and `createObjectURL`
+ * is missing entirely. The stub plays a part and ends it on the next tick,
+ * so the reading moves to the next part.
+ */
+function installAudioElement() {
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const originalPlay = HTMLAudioElement.prototype.play;
+  URL.createObjectURL = () => 'blob:fake-audio';
+  URL.revokeObjectURL = (_url: string) => undefined;
+  HTMLAudioElement.prototype.play = function (this: HTMLAudioElement) {
+    queueMicrotask(() => {
+      this.onended?.(new Event('ended'));
+    });
+    return Promise.resolve();
+  };
+  return () => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    HTMLAudioElement.prototype.play = originalPlay;
+  };
+}
+
+/** A fake server that answers with MP3. */
+function installCloudServer() {
+  const calls: string[] = [];
+  const fetchMock = vi.fn(async (url: string) => {
+    calls.push(url);
+    return {
+      ok: true,
+      status: 200,
+      blob: async () => new Blob(['fake-mp3'], { type: 'audio/mpeg' }),
+    };
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return { calls, fetchMock };
+}
+
 function voice(lang: string, name: string): SpeechSynthesisVoice {
   return { lang, name } as SpeechSynthesisVoice;
 }
@@ -143,7 +203,10 @@ afterEach(() => {
   piperMock.loadState = 'idle';
   piperMock.listeners.clear();
   piperMock.warmCalls = 0;
+  piperMock.synthesiseCalls = 0;
   piperMock.synthesiseResult = false;
+  vi.unstubAllGlobals();
+  serviceConfig.speakEndpoint = savedEndpoint;
 });
 
 describe('the browser fallback never reads Urdu in English', () => {
@@ -194,11 +257,70 @@ describe('the pill shows the voice arriving', () => {
     unmount();
   });
 
-  it('starts the model download when preloadVoice is called', async () => {
+  it('starts no model download when preloadVoice is called', async () => {
     installSpeechEngine('start', [voice('ur-PK', 'Urdu (Pakistan)')]);
     const { value, unmount } = renderProvider();
     value.preloadVoice();
-    await waitFor(() => expect(piperMock.warmCalls).toBe(1));
+    /* The cloud voice needs no warm-up, and Piper is only a fallback — so
+       preloadVoice starts no download at all. */
+    expect(piperMock.warmCalls).toBe(0);
+    unmount();
+  });
+
+  it('starts no model download when warm is called', async () => {
+    installSpeechEngine('start', [voice('ur-PK', 'Urdu (Pakistan)')]);
+    const { value, unmount } = renderProvider();
+    value.warm('ur-PK', 'صاف آسمان ہے۔');
+    /* Warming Piper would start the 63 MB download the farmer complained
+       about, so warm does nothing now. */
+    expect(piperMock.warmCalls).toBe(0);
+    unmount();
+  });
+});
+
+describe('the cloud voice is tried first', () => {
+  it('reads with the server voice and never reaches Piper or the browser', async () => {
+    const engine = installSpeechEngine('start', [voice('ur-PK', 'Urdu (Pakistan)')]);
+    setCloudEndpoint(CLOUD_URL);
+    const { calls } = installCloudServer();
+    const restoreAudio = installAudioElement();
+    piperMock.synthesiseResult = true;
+    const { value, unmount } = renderProvider();
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await value.speak({ id: 'weather', text: 'صاف آسمان ہے۔', lang: 'ur-PK' });
+    });
+    expect(started).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe(CLOUD_URL);
+    /* Neither fallback was used: Piper's synthesis was never asked for,
+       and the browser's engine was never handed the words. */
+    expect(piperMock.synthesiseCalls).toBe(0);
+    expect(engine.spoken).toHaveLength(0);
+    expect(screen.getByTestId('speaking')).toHaveTextContent('none');
+    restoreAudio();
+    unmount();
+  });
+
+  it('falls through to the next voice when the server cannot be reached', async () => {
+    const urdu = voice('ur-PK', 'Urdu (Pakistan)');
+    const engine = installSpeechEngine('start', [urdu]);
+    setCloudEndpoint(CLOUD_URL);
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('network down');
+    }));
+    /* Piper is tried and cannot run either, so the browser's Urdu voice
+       reads — the press is answered, not silent. */
+    piperMock.synthesiseResult = false;
+    const { value, unmount } = renderProvider();
+    let started: boolean | undefined;
+    await act(async () => {
+      started = await value.speak({ id: 'weather', text: 'صاف آسمان ہے۔', lang: 'ur-PK' });
+    });
+    expect(started).toBe(true);
+    expect(piperMock.synthesiseCalls).toBe(1);
+    expect(engine.spoken).toHaveLength(1);
+    expect(engine.spoken[0]?.voice).toBe(urdu);
     unmount();
   });
 });
