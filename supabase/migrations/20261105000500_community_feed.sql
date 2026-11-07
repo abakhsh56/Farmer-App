@@ -450,7 +450,7 @@ set search_path = public, pg_temp
 as $$
   with groups as (
     select
-      g.id,
+      g.id as group_id,
       g.name,
       g.description,
       g.visibility,
