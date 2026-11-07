@@ -8,6 +8,7 @@ import { dealerNameKey } from '@/data/dealers';
 import { useLocale } from '@/i18n/LocaleProvider';
 import type { MessageKey } from '@/i18n/catalog';
 import { initialsOf } from '@/lib/initials';
+import { recordSignal } from '@/services/signals';
 import { useSession } from '@/session/SessionProvider';
 
 type Props = { onBrowseDealers: () => void };
@@ -26,7 +27,7 @@ type Props = { onBrowseDealers: () => void };
  */
 export function ChatScreen({ onBrowseDealers }: Props) {
   const { t } = useLocale();
-  const { requestIdentity } = useSession();
+  const { account, requestIdentity } = useSession();
   const chat = useChat();
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
@@ -75,6 +76,17 @@ export function ChatScreen({ onBrowseDealers }: Props) {
       requestIdentity(() => {
         chat.send(dealerId, text);
         setDraft('');
+        /*
+         * A message to a dealer is the farmer asking something of a shop. What
+         * was asked is their own words and is never recorded — only that they
+         * asked this dealer, which is the coarse signal the engine can use.
+         */
+        recordSignal(account?.partyId ?? null, {
+          signalType: 'question',
+          source: 'chat',
+          subject: dealerId,
+          strength: 'moderate',
+        });
       }, 'session.why.message');
     };
 

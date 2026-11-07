@@ -7,7 +7,9 @@ import { useLocale } from '@/i18n/LocaleProvider';
 import { formatMoney, formatNumber, formatRelativeTime } from '@/i18n/format';
 import { useLocation } from '@/location/LocationProvider';
 import { useDealerSearch, useProductSearch } from '@/services/hooks';
+import { recordSignal } from '@/services/signals';
 import type { DealerSummary, DealerProduct, ProductHit } from '@/services/types';
+import { useSession } from '@/session/SessionProvider';
 
 /**
  * One search box for shops and for stock.
@@ -70,6 +72,7 @@ export function SearchScreen({
 }) {
   const { t, locale } = useLocale();
   const location = useLocation();
+  const { account } = useSession();
 
   /** What the farmer is typing — never delayed, so the field never lags. */
   const [text, setText] = useState('');
@@ -114,6 +117,18 @@ export function SearchScreen({
     setSubmitted(trimmed);
     setText(trimmed);
     setTab(focus);
+    /*
+     * A confirmed search is the farmer saying what they are looking for, in
+     * their own words — the clearest interest signal the app gets. The term
+     * itself is the topic, so it is the subject; nothing else about the search
+     * is recorded.
+     */
+    recordSignal(account?.partyId ?? null, {
+      signalType: 'search',
+      source: 'search',
+      subject: trimmed,
+      strength: 'moderate',
+    });
   };
 
   const dealerRows = dealers.data;

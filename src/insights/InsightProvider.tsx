@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { useLocale } from '@/i18n/LocaleProvider';
 import { ownerFor, usePersistentDocument } from '@/services/persistence';
+import { recordSignal, toCropCode } from '@/services/signals';
 import { useSession } from '@/session/SessionProvider';
 import { InsightSheets } from '@/components/insights/Insights';
 import {
@@ -15,8 +16,10 @@ import {
   addCrop as addCropIn,
   chooseCrop as chooseCropIn,
   createSeed,
+  cropById,
   dismiss as dismissIn,
   hydrate,
+  insightById,
   makePrimary as makePrimaryIn,
   markActed,
   markAllRead,
@@ -80,6 +83,21 @@ export const INSIGHT_STORAGE_KEY = 'agri-shop.insights';
 /** How often "2h" is recomputed so a source line does not go quietly stale. */
 const TICK_MS = 30_000;
 
+/**
+ * The coarse signal for an insight: what it is about and which crop it belongs
+ * to. Reads the current document, so a signal is only recorded for an insight
+ * that is actually on screen.
+ */
+function insightSignal(
+  data: InsightData,
+  insightId: string,
+): { subject: string; cropCode: string | null } | null {
+  const insight = insightById(data, insightId);
+  if (!insight) return null;
+  const crop = cropById(data, insight.cropId);
+  return { subject: insight.titleKey, cropCode: crop ? toCropCode(crop.nameKey) : null };
+}
+
 export function InsightProvider({ children }: { children: ReactNode }) {
   const { t } = useLocale();
   const { account } = useSession();
@@ -115,6 +133,22 @@ export function InsightProvider({ children }: { children: ReactNode }) {
         setNotificationsOpen(false);
         setOpenInsightId(insightId);
         setData((current) => markViewed(current, insightId));
+        /*
+         * Opening advice is the farmer saying "this matters enough to read". A
+         * view is a weak signal on its own — one read does not mean a crop is
+         * theirs — but repeated views are how the engine learns what they keep
+         * coming back to.
+         */
+        const signal = insightSignal(data, insightId);
+        if (signal) {
+          recordSignal(account?.partyId ?? null, {
+            signalType: 'viewed',
+            source: 'ui_interaction',
+            subject: signal.subject,
+            cropCode: signal.cropCode,
+            strength: 'weak',
+          });
+        }
       },
       close: () => setOpenInsightId(null),
       act: (insightId) => {
@@ -124,6 +158,22 @@ export function InsightProvider({ children }: { children: ReactNode }) {
       dismiss: (insightId) => {
         setData((current) => dismissIn(current, insightId));
         setOpenInsightId(null);
+        /*
+         * A dismissal is the strongest signal the feed gives: the farmer looked
+         * at this advice and said no. It is recorded as such, so the engine can
+         * stop showing them more of the same — a dismissal that was never
+         * recorded is advice that keeps coming back.
+         */
+        const signal = insightSignal(data, insightId);
+        if (signal) {
+          recordSignal(account?.partyId ?? null, {
+            signalType: 'dismissed',
+            source: 'ui_interaction',
+            subject: signal.subject,
+            cropCode: signal.cropCode,
+            strength: 'strong',
+          });
+        }
       },
       makePrimary: (cropId) => setData((current) => makePrimaryIn(current, cropId)),
       addCrop: (input) => setData((current) => addCropIn(current, input, Date.now())),
@@ -135,7 +185,7 @@ export function InsightProvider({ children }: { children: ReactNode }) {
       closeNotifications: () => setNotificationsOpen(false),
       readAll: () => setData((current) => markAllRead(current)),
     }),
-    [data, now, openInsightId, notificationsOpen, t],
+    [data, now, openInsightId, notificationsOpen, t, account?.partyId],
   );
 
   return (

@@ -16,6 +16,7 @@ import { dealerNameKey } from '@/data/dealers';
 import { useLocation } from '@/location/LocationProvider';
 import { ROUNDUP } from '@/data/products';
 import { useStockists } from '@/services/hooks';
+import { recordSignal } from '@/services/signals';
 import { verdictFor, type Verdict } from '@/scan/analyze';
 import { useSession } from '@/session/SessionProvider';
 import {
@@ -82,7 +83,7 @@ type Turn =
 export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
   const { t, locale } = useLocale();
   const credit = useCredit();
-  const { requestIdentity } = useSession();
+  const { account, requestIdentity } = useSession();
   const [step, setStep] = useState<Step>('capture');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [expertAsked, setExpertAsked] = useState(false);
@@ -121,9 +122,23 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
 
   useEffect(() => {
     if (step !== 'analysing') return;
-    const timer = window.setTimeout(() => setStep('result'), 1200);
+    const timer = window.setTimeout(() => {
+      setStep('result');
+      /*
+       * The scan reached a result: the farmer photographed a crop and named a
+       * symptom. That is a deliberate act about one crop, so it is recorded as
+       * a strong signal — the crop code and the symptom key, never the photo.
+       */
+      recordSignal(account?.partyId ?? null, {
+        signalType: 'scan',
+        source: 'scan',
+        subject: symptom,
+        cropCode: crop,
+        strength: 'strong',
+      });
+    }, 1200);
     return () => window.clearTimeout(timer);
-  }, [step]);
+  }, [step, account?.partyId, crop, symptom]);
 
   const back = () => {
     if (step === 'crop') setStep('capture');
@@ -477,6 +492,20 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
             { id: Date.now() + 1, from: 'assistant', verdict },
           ]);
           setQuestion('');
+          /*
+           * A follow-up question about the scanned crop. The question's wording
+           * is the farmer's own words and is never recorded — only that a
+           * question was asked about this crop, and what the assistant did with
+           * it (answered, refused, or handed to a person).
+           */
+          recordSignal(account?.partyId ?? null, {
+            signalType: 'question',
+            source: 'chat',
+            subject: 'scan-follow-up',
+            cropCode: crop,
+            strength: 'moderate',
+            detail: { verdict: verdict.kind },
+          });
         }}
       >
         <label className="sr-only" htmlFor="scan-question">
