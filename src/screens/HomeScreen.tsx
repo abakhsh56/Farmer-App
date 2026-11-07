@@ -11,6 +11,7 @@ import {
 import { useEffect } from 'react';
 import { SectionLabel } from '@/components/SectionLabel';
 import { CropCard, NotificationBell } from '@/components/insights/Insights';
+import { MandiRatesCard } from '@/components/MandiRatesCard';
 import { useCredit } from '@/credit/CreditProvider';
 import { shopsHoldingCredit } from '@/credit/store';
 import { useLocale } from '@/i18n/LocaleProvider';
@@ -656,6 +657,14 @@ export function HomeScreen({
         answer to the same question, with the same destination.
       */}
       <CropCard onScan={onScan} />
+
+      {/*
+        Mandi rates sit directly above My Credit: after sign-in the credit
+        card appears, and the rates are the first thing above it — the order
+        the farmer reads the morning in. The widget reads live rates from
+        market_rates(); a rate from another day is never shown as today's.
+      */}
+      <MandiRatesCard />
 
       {/*
         The credit card is account data, so before there is an account it is not
