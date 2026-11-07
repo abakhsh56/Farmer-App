@@ -12,21 +12,10 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLocale } from '@/i18n/LocaleProvider';
-import { formatHour, formatRelativeTime, formatWeekdayDate, intlLocale } from '@/i18n/format';
-import { useInsights } from '@/insights/InsightProvider';
+import { formatRelativeTime, formatWeekdayDate, intlLocale } from '@/i18n/format';
 import { useLocation } from '@/location/LocationProvider';
-import { useForecast, useHourly, useWeather } from '@/services/hooks';
-import {
-  computeCardAdvisory,
-  expertAnswerFromPosts,
-  pestReportsFromPosts,
-  type AdvisoryItem,
-} from '@/services/advisory';
-import { renderAdvisoryCopy } from '@/services/advisoryCopy';
-import { useCapability } from '@/capability/CapabilityProvider';
-import { useCommunity } from '@/community/CommunityProvider';
-import { ME, PLACES } from '@/data/community';
-import { isWeatherStale, type WeatherDay } from '@/services/types';
+import { useForecast, useWeather } from '@/services/hooks';
+import { type WeatherDay } from '@/services/types';
 import { daylightProgress, sunTimes, type SunTimes } from '@/services/sun';
 
 /**
@@ -35,7 +24,12 @@ import { daylightProgress, sunTimes, type SunTimes } from '@/services/sun';
  * The Home card carries the one number a farmer needs before walking out. This
  * screen is what the card opens into: the same reading, given room — the sun's
  * real path across today, the three times that path is pinned to, the numbers the
- * card squeezes into a line, and the next few days.
+ * card squeezes into a line, and the next seven days.
+ *
+ * The background is the design system's own sky: a terracotta gradient at the
+ * top that settles into the cream canvas below (`.weather-sky` in the theme),
+ * and the cards are the design system's cards — never the near-black
+ * translucent tiles the screen used to fall back to.
  *
  * Two rules inherited from the card, because a bigger screen is not a licence to
  * relax them:
@@ -46,8 +40,12 @@ import { daylightProgress, sunTimes, type SunTimes } from '@/services/sun';
  *   from a 6 AM–6 PM placeholder. Where the sun does not cross the horizon, no
  *   times are printed.
  *
- * · the reading's age travels with it. "updated 2h" is on the page, and the
- *   refresh control asks the same service the card asks.
+ * · the reading's age travels with it, next to the heading. "updated 2h" is on
+ *   the page, and the refresh control asks the same service the card asks.
+ *
+ * The spray advice does NOT live here any more: it is on the Home card only,
+ * so the farmer never reads two versions of one recommendation. The
+ * "add your crop" card is gone with it — the crop is added from the Home card.
  *
  * Motion is deliberate rather than decorative: the temperature counts up once,
  * the arc draws itself and the sun travels to *now* along it, and the tiles settle
@@ -135,74 +133,47 @@ function useAnimatedFraction(target: number): number {
 }
 
 export function WeatherScreen({ onBack }: { onBack: () => void }) {
-  const { t, tIn, locale } = useLocale();
+  const { t, locale } = useLocale();
   const location = useLocation();
   const weather = useWeather(location.activePoint);
-  const forecast = useForecast(location.activePoint, 4);
+  /* Seven days, as the farmer reads the week ahead — not four. */
+  const forecast = useForecast(location.activePoint, 7);
 
   const reading = weather.sourced;
   const now = Date.now();
-  const readingStale = reading !== null && isWeatherStale(reading);
 
   /*
-   * The same advice the Home card prints, from the same computed list — a
-   * farmer moving between the two surfaces never reads two different
-   * windows for the same morning. The list is the ten signal-driven items
-   * in the PRD alert model's priority order, at most three.
+   * Which day the screen is showing. Null is today, live. Tapping a day card
+   * sets it to that day, and the whole screen syncs to it: the hero becomes
+   * that day's expected high, the sun arc becomes that day's sunrise and
+   * sunset, and the numbers become the ones the daily forecast actually
+   * carries (high, low, rain). Tapping the same day again goes back to today.
    */
-  const hourly = useHourly(location.activePoint, 24);
-  const insights = useInsights();
-  const community = useCommunity();
-  const capability = useCapability();
-  const crop = insights.primary ?? null;
-  const advisory: AdvisoryItem[] = computeCardAdvisory(
-    {
-      now: reading,
-      hourly: hourly.sourced,
-      forecast: forecast.sourced,
-      crop,
-      insights: crop ? insights.forCrop(crop.id) : [],
-      actedInsights: crop
-        ? insights.forCrop(crop.id).filter((entry) => entry.status === 'acted')
-        : [],
-      pestReports: pestReportsFromPosts(
-        community.posts,
-        (postId) => community.expertAnswered(postId),
-        ME,
-        (placeId) => {
-          const place = PLACES.find((entry) => entry.id === placeId);
-          return place ? t(place.labelKey) : t('location.none');
-        },
-      ),
-      expertAnswer: expertAnswerFromPosts(
-        community.posts,
-        (postId) => community.expertAnswered(postId),
-        ME,
-      ),
-      sources: {
-        weather: reading?.sourceLabel ?? t('advisory.source.openMeteo'),
-        community: t('advisory.source.community'),
-        communityExpert: t('advisory.source.communityExpert'),
-        knowledge: t('advisory.source.knowledge'),
-      },
-    },
-    now,
-  );
-  const advisoryCopies = advisory.map((item) =>
-    renderAdvisoryCopy(item, capability.level, {
-      t,
-      tUr: (key, values) => tIn('ur', key, values),
-      formatHour: (hour) => formatHour(hour, t),
-      formatHourUr: (hour) => formatHour(hour, (key, values) => tIn('ur', key, values)),
-    }),
-  );
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const selectedDay =
+    selectedDate !== null
+      ? forecast.data.find((day) => day.date === selectedDate) ?? null
+      : null;
+  const viewDate = selectedDay ? new Date(`${selectedDay.date}T12:00:00`) : new Date(now);
 
-  const times = sunTimes(new Date(now), location.activePoint);
-  const animatedTemp = useCountUp(reading?.data.tempC ?? null);
+  const heroTemp = selectedDay ? selectedDay.maxC : reading?.data.tempC ?? null;
+  const animatedTemp = useCountUp(heroTemp);
 
-  const condition = reading?.data.conditionKey
-    ? t(reading.data.conditionKey)
-    : reading?.data.conditionText ?? null;
+  const condition = selectedDay
+    ? selectedDay.conditionText
+    : reading?.data.conditionKey
+      ? t(reading.data.conditionKey)
+      : reading?.data.conditionText ?? null;
+
+  const times = sunTimes(viewDate, location.activePoint);
+  /* On a future day the sun has no "now" — it sits at solar noon, the top of
+     that day's arc. */
+  const arcNow = selectedDay && times ? times.solarNoon : now;
+
+  const refresh = () => {
+    weather.retry();
+    forecast.retry();
+  };
 
   return (
     <div className="weather-sky relative flex min-h-dvh flex-col px-5 pt-4 pb-10 text-foreground">
@@ -211,7 +182,7 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
           type="button"
           onClick={onBack}
           aria-label={t('common.back')}
-          className="grid size-10 shrink-0 place-items-center rounded-full bg-white/40 text-foreground motion-safe:transition-transform motion-safe:active:scale-95 dark:bg-white/10"
+          className="grid size-10 shrink-0 place-items-center rounded-full border border-border bg-card text-foreground motion-safe:transition-transform motion-safe:active:scale-95"
         >
           <ChevronLeft className="size-5 rtl:rotate-180" aria-hidden />
         </button>
@@ -221,22 +192,30 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
           <p className="mt-0.5 truncate text-label text-foreground/70">
             {location.placeLabel || t('location.none')}
           </p>
+          {reading ? (
+            <p className="mt-0.5 flex items-center justify-center gap-1 text-caption text-foreground/60">
+              <RefreshCw className="size-3" aria-hidden />
+              {t('weather.updated', {
+                time: formatRelativeTime(reading.observedAt, now, t),
+              })}
+            </p>
+          ) : null}
         </div>
 
         <button
           type="button"
-          onClick={weather.retry}
+          onClick={refresh}
           aria-label={t('weather.refresh')}
           className="grid size-10 shrink-0 place-items-center rounded-full text-foreground motion-safe:transition-transform motion-safe:active:scale-95"
         >
           <RefreshCw
-            className={`size-4 ${weather.refreshing ? 'animate-spin' : ''}`}
+            className={`size-4 ${weather.refreshing || forecast.refreshing ? 'animate-spin' : ''}`}
             aria-hidden
           />
         </button>
       </header>
 
-      {weather.status === 'loading' ? (
+      {weather.status === 'loading' && selectedDay === null ? (
         <div className="mt-16 flex flex-col items-center gap-3" role="status" aria-live="polite">
           <div className="h-24 w-44 animate-pulse rounded-lg bg-foreground/10" />
           <div className="h-4 w-32 animate-pulse rounded-full bg-foreground/10" />
@@ -247,7 +226,8 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
           {/*
             One number, set in the serif at hero size. The count-up is a single
             performance, not a loop: a temperature that keeps moving is a
-            temperature a farmer cannot read.
+            temperature a farmer cannot read. On a chosen day it is that day's
+            expected high; today it is the live reading.
           */}
           <p className="text-hero font-serif lining-nums tabular-nums animate-in fade-in zoom-in-95 duration-700 fill-mode-both motion-reduce:animate-none">
             {animatedTemp === null ? '—' : `${Math.round(animatedTemp)}°`}
@@ -258,14 +238,26 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
           </p>
 
           <p className="mt-1 text-label text-foreground/70 animate-in fade-in duration-700 delay-300 fill-mode-both motion-reduce:animate-none">
-            {t('weather.today', { date: formatWeekdayDate(new Date(now), locale) })}
+            {selectedDay
+              ? formatWeekdayDate(viewDate, locale)
+              : t('weather.today', { date: formatWeekdayDate(viewDate, locale) })}
           </p>
+
+          {selectedDay ? (
+            <button
+              type="button"
+              onClick={() => setSelectedDate(null)}
+              className="mt-2 rounded-full border border-border bg-card px-3 py-1 text-label text-brand motion-safe:transition-transform motion-safe:active:scale-95"
+            >
+              {t('weather.showToday')}
+            </button>
+          ) : null}
 
           {reading?.status === 'failing' || weather.status === 'error' ? (
             <button
               type="button"
-              onClick={weather.retry}
-              className="mt-3 rounded-full bg-white/40 px-4 py-2 text-label text-foreground motion-safe:transition-transform motion-safe:active:scale-95 dark:bg-white/10"
+              onClick={refresh}
+              className="mt-3 rounded-full border border-border bg-card px-4 py-2 text-label text-foreground motion-safe:transition-transform motion-safe:active:scale-95"
             >
               {t('common.tryAgain')}
             </button>
@@ -275,42 +267,71 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
 
       {times ? (
         <section className="mt-10 animate-in fade-in duration-700 fill-mode-both delay-200 motion-reduce:animate-none">
-          <SunArc times={times} now={now} />
+          <SunArc times={times} now={arcNow} />
         </section>
       ) : null}
 
-      <section className="mt-8 grid grid-cols-2 gap-3">
-        <Metric
-          Icon={Droplets}
-          label={t('weather.metricHumidity')}
-          value={
-            reading?.data.humidityPct == null ? '—' : `${Math.round(reading.data.humidityPct)}%`
-          }
-          delay={220}
-        />
-        <Metric
-          Icon={Wind}
-          label={t('weather.metricWind')}
-          value={reading?.data.windKph == null ? '—' : `${Math.round(reading.data.windKph)} km/h`}
-          delay={290}
-        />
-        <Metric
-          Icon={CloudRain}
-          label={t('weather.metricRain')}
-          value={reading?.data.precipMm == null ? '—' : `${reading.data.precipMm} mm`}
-          delay={360}
-        />
-        <Metric
-          Icon={Thermometer}
-          label={t('weather.metricFeels')}
-          value={
-            reading?.data.feelsLikeC == null
-              ? '—'
-              : `${Math.round(reading.data.feelsLikeC)}°`
-          }
-          delay={430}
-        />
-      </section>
+      {selectedDay ? (
+        /*
+         * A chosen day carries only what the daily forecast knows: the high,
+         * the low, and the rain. Humidity, wind and feels-like are not in a
+         * daily forecast, so they are not drawn — a missing value stays
+         * missing rather than a dash filling the screen.
+         */
+        <section className="mt-8 grid grid-cols-3 gap-3">
+          <Metric
+            Icon={Thermometer}
+            label={t('weather.metricHigh')}
+            value={selectedDay.maxC === null ? '—' : `${Math.round(selectedDay.maxC)}°`}
+            delay={220}
+          />
+          <Metric
+            Icon={Thermometer}
+            label={t('weather.metricLow')}
+            value={selectedDay.minC === null ? '—' : `${Math.round(selectedDay.minC)}°`}
+            delay={290}
+          />
+          <Metric
+            Icon={CloudRain}
+            label={t('weather.metricRain')}
+            value={selectedDay.precipMm === null ? '—' : `${selectedDay.precipMm} mm`}
+            delay={360}
+          />
+        </section>
+      ) : (
+        <section className="mt-8 grid grid-cols-2 gap-3">
+          <Metric
+            Icon={Droplets}
+            label={t('weather.metricHumidity')}
+            value={
+              reading?.data.humidityPct == null ? '—' : `${Math.round(reading.data.humidityPct)}%`
+            }
+            delay={220}
+          />
+          <Metric
+            Icon={Wind}
+            label={t('weather.metricWind')}
+            value={reading?.data.windKph == null ? '—' : `${Math.round(reading.data.windKph)} km/h`}
+            delay={290}
+          />
+          <Metric
+            Icon={CloudRain}
+            label={t('weather.metricRain')}
+            value={reading?.data.precipMm == null ? '—' : `${reading.data.precipMm} mm`}
+            delay={360}
+          />
+          <Metric
+            Icon={Thermometer}
+            label={t('weather.metricFeels')}
+            value={
+              reading?.data.feelsLikeC == null
+                ? '—'
+                : `${Math.round(reading.data.feelsLikeC)}°`
+            }
+            delay={430}
+          />
+        </section>
+      )}
 
       {forecast.data.length > 0 ? (
         <section className="mt-8">
@@ -319,56 +340,18 @@ export function WeatherScreen({ onBack }: { onBack: () => void }) {
           </p>
           <ul className="mt-2 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {forecast.data.map((day, index) => (
-              <ForecastDay key={day.date} day={day} index={index} />
+              <ForecastDay
+                key={day.date}
+                day={day}
+                index={index}
+                selected={day.date === selectedDate}
+                onSelect={() =>
+                  setSelectedDate(day.date === selectedDate ? null : day.date)
+                }
+              />
             ))}
           </ul>
         </section>
-      ) : null}
-
-      {/*
-        The same advice the Home card carries, from the same computed list
-        rather than re-worded: a farmer moving between the two surfaces must
-        not read two different spray windows for the same morning. Each item
-        carries its source and its freshness.
-      */}
-      {advisory.length > 0 ? (
-        <section className="mt-8 rounded-lg border border-foreground/10 bg-white/40 p-4 dark:bg-white/10">
-          <ul className="flex flex-col gap-3">
-            {advisory.map((item, index) => {
-              const copy = advisoryCopies[index];
-              if (!copy) return null;
-              return (
-                <li key={`${item.kind}-${index}`}>
-                  <p className="text-body font-medium">{copy.title}</p>
-                  <p className="mt-1 text-body-sm text-foreground/70">{copy.body}</p>
-                  <p className="mt-1 text-caption text-foreground/60">
-                    {item.source} · {formatRelativeTime(item.observedAt, now, t)}
-                  </p>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      ) : (
-        <section className="mt-8 rounded-lg border border-foreground/10 bg-white/40 p-4 dark:bg-white/10">
-          <p className="text-body font-medium">
-            {readingStale ? t('weather.stale.title') : t('weather.unavailable.title')}
-          </p>
-          <p className="mt-1 text-body-sm text-foreground/70">
-            {readingStale && reading
-              ? t('weather.stale', { age: formatRelativeTime(reading.observedAt, now, t) })
-              : t('weather.unavailable.body')}
-          </p>
-        </section>
-      )}
-
-      {reading ? (
-        <p className="mt-5 flex items-center justify-center gap-1.5 text-caption text-foreground/60">
-          <RefreshCw className="size-3" aria-hidden />
-          {t('weather.updated', {
-            time: formatRelativeTime(reading.observedAt, now, t),
-          })}
-        </p>
       ) : null}
     </div>
   );
@@ -476,7 +459,7 @@ function Metric({
   return (
     <div
       style={{ animationDelay: `${delay}ms` }}
-      className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both rounded-lg border border-foreground/10 bg-white/40 p-3.5 duration-700 motion-safe:transition-transform motion-safe:hover:-translate-y-0.5 motion-reduce:animate-none dark:bg-white/10"
+      className="animate-in fade-in slide-in-from-bottom-2 fill-mode-both rounded-lg border border-border bg-card p-3.5 duration-700 motion-safe:transition-transform motion-safe:hover:-translate-y-0.5 motion-reduce:animate-none"
     >
       <p className="flex items-center gap-1.5 text-label text-foreground/70">
         <Icon className="size-3.5 shrink-0" aria-hidden />
@@ -487,7 +470,17 @@ function Metric({
   );
 }
 
-function ForecastDay({ day, index }: { day: WeatherDay; index: number }) {
+function ForecastDay({
+  day,
+  index,
+  selected,
+  onSelect,
+}: {
+  day: WeatherDay;
+  index: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const { t, locale } = useLocale();
   const name = new Intl.DateTimeFormat(intlLocale(locale), {
     weekday: 'short',
@@ -497,25 +490,43 @@ function ForecastDay({ day, index }: { day: WeatherDay; index: number }) {
   return (
     <li
       style={{ animationDelay: `${120 + index * 80}ms` }}
-      className="min-w-24 animate-in fade-in slide-in-from-bottom-2 fill-mode-both rounded-lg border border-foreground/10 bg-white/40 p-3 text-center duration-700 motion-reduce:animate-none dark:bg-white/10"
+      className="min-w-24 animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-700 motion-reduce:animate-none"
     >
-      <p className="text-label text-foreground/70">{name}</p>
-      <div className="mt-2 flex items-baseline justify-center gap-1.5">
-        <span className="font-serif text-subheading tabular-nums">
-          {day.maxC === null ? '—' : `${Math.round(day.maxC)}°`}
-        </span>
-        <span className="text-caption text-foreground/60 tabular-nums">
-          {day.minC === null ? '—' : `${Math.round(day.minC)}°`}
-        </span>
-      </div>
-      {day.precipMm !== null && day.precipMm > 0 ? (
-        <p className="mt-1.5 flex items-center justify-center gap-1 text-caption text-foreground/70">
-          <CloudRain className="size-3" aria-hidden />
-          {day.precipMm} mm
-        </p>
-      ) : (
-        <p className="mt-1.5 text-caption text-foreground/50">{t('common.steady')}</p>
-      )}
+      {/*
+        A day is a button, not a tile: tapping it shows that day's weather
+        on this same screen — hero, sun arc and numbers all sync to it.
+        Tapping the chosen day again goes back to today. The chosen day
+        carries the brand ring so the farmer can see which day he is on.
+      */}
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={selected}
+        aria-label={`${name}, ${day.maxC === null ? '' : `${Math.round(day.maxC)}°`}`}
+        className={`w-full rounded-lg border p-3 text-center motion-safe:transition-transform motion-safe:active:scale-95 ${
+          selected
+            ? 'border-brand bg-card ring-2 ring-brand'
+            : 'border-border bg-card'
+        }`}
+      >
+        <p className="text-label text-foreground/70">{name}</p>
+        <div className="mt-2 flex items-baseline justify-center gap-1.5">
+          <span className="font-serif text-subheading tabular-nums">
+            {day.maxC === null ? '—' : `${Math.round(day.maxC)}°`}
+          </span>
+          <span className="text-caption text-foreground/60 tabular-nums">
+            {day.minC === null ? '—' : `${Math.round(day.minC)}°`}
+          </span>
+        </div>
+        {day.precipMm !== null && day.precipMm > 0 ? (
+          <p className="mt-1.5 flex items-center justify-center gap-1 text-caption text-foreground/70">
+            <CloudRain className="size-3" aria-hidden />
+            {day.precipMm} mm
+          </p>
+        ) : (
+          <p className="mt-1.5 text-caption text-foreground/50">{t('common.steady')}</p>
+        )}
+      </button>
     </li>
   );
 }

@@ -363,4 +363,29 @@
     outline-offset: 2px;
   }
 
+  /*
+   * The weather detail sky. The reference page opens under a brown /
+   * terracotta gradient that settles into the cream canvas below — clay for
+   * the sky, the canvas for the rest, only design-system tokens. Before this
+   * the class was named but never defined, so the screen fell back to the
+   * browser's dark default and the cards read black.
+   */
+  .weather-sky {
+    background: linear-gradient(
+      to bottom,
+      var(--color-clay-300) 0%,
+      var(--color-clay-100) 22%,
+      var(--background) 55%
+    );
+  }
+
+  .dark .weather-sky {
+    background: linear-gradient(
+      to bottom,
+      var(--color-clay-800) 0%,
+      var(--color-ink-900) 30%,
+      var(--background) 60%
+    );
+  }
+
 }
