@@ -167,7 +167,7 @@ create or replace function public.community_create_post(
   p_area_label text default null,
   p_language text default 'ur',
   p_idempotency_key text default null,
-  p_group_id uuid
+  p_group_id uuid default null
 )
 returns public.community_posts
 language plpgsql
