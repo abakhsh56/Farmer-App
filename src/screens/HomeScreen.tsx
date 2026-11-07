@@ -487,7 +487,7 @@ export function HomeScreen({
               onClick={weather.retry}
               disabled={weather.refreshing}
               aria-label={t('weather.refresh')}
-              className="flex items-center gap-1 rounded-full bg-white/12 px-2 py-1 text-caption text-white disabled:opacity-60"
+              className="flex items-center gap-1 rounded-full px-2 py-1 text-caption text-white disabled:opacity-60"
             >
               <RefreshCw
                 className={weather.refreshing ? 'size-3 animate-spin' : 'size-3'}
