@@ -8,13 +8,13 @@
  * the server now, and the phone only downloads a few kilobytes of MP3 per
  * sentence — fast even on a slow connection, and nothing to preload.
  *
- * The vendor is Google Cloud Text-to-Speech, and the key lives here, in the
- * function's environment (`GOOGLE_CLOUD_TTS_API_KEY`). A key in the APK is a
- * key published on the internet. The voice is Urdu (`ur-PK`), the natural
- * WaveNet female first — there is no Saraiki voice to prefer, because Google
- * publishes none, so the Urdu voice reads the Urdu advice, a native Saraiki
- * speaker speaking Urdu. The pace is a quarter slower than the model's own,
- * which is the speed the advice is written to be heard at.
+ * The vendor is Fish Audio, and the key lives here, in the function's
+ * environment (`FISH_AUDIO_API_KEY`). A key in the APK is a key published
+ * on the internet. The voice is Ayesha, a Fish official Urdu voice — natural,
+ * conversational, clear. There is no Saraiki voice in Fish's library, so the
+ * Urdu voice reads the Urdu advice, a native Saraiki speaker speaking Urdu.
+ * The pace is a quarter slower than the model's own, which is the speed the
+ * advice is written to be heard at.
  *
  * Routes, after the function name — there are none. This function answers the
  * bare path, not a sub-route, so the client's call is a plain POST to the
@@ -32,36 +32,42 @@
  *   · The text is capped at 500 characters. A narration part is under 200,
  *     so the cap never binds a real reading — it binds a caller sending a
  *     whole page.
- *   · The voice is retried only when Google refuses the *name* (400). A bad
- *     key (401/403), a limit (429) or a server error is not fixed by another
- *     voice, so it is reported at once instead of being retried three times.
+ *   · The free model (`s2.1-pro-free`) costs $0, but it is a fair-use
+ *     prototype model with no latency guarantees, so a slow or refused
+ *     generation is answered by falling back, not by retrying it three
+ *     times.
  */
 
 import { CORS, clean, fail, json, preflight, readJson } from '../_shared/server.ts';
 
 /**
- * The Google Cloud Text-to-Speech key.
+ * The Fish Audio API key.
  *
  * Read from the function's environment, never from code and never from the
- * client. Set it with `supabase secrets set GOOGLE_CLOUD_TTS_API_KEY=<key>`
+ * client. Set it with `supabase secrets set FISH_AUDIO_API_KEY=<redacted>`
  * (or in the dashboard's function secrets). Until it is set the function
  * answers 503 and the app falls back to the voice it carries — the press
  * still works, only slower.
  */
-const TTS_KEY_ENV = 'GOOGLE_CLOUD_TTS_API_KEY';
+const TTS_KEY_ENV = 'FISH_AUDIO_API_KEY';
 
 /**
- * The voices to try, in order.
+ * The voice to read with: Ayesha, a Fish official Urdu voice.
  *
- * WaveNet first: its model was trained on recordings of people speaking, so
- * it carries the emphasis and inflection a flat voice drops. The female
- * first, then the male, then the standard female — a voice that does not
- * exist is a 400 from Google, and the next one is tried.
+ * The ID is a public voice-library identifier, not a secret — it names the
+ * voice the way a library card names a book. Ayesha is female, young adult,
+ * tagged natural, conversational, professional and clear, and she reads short
+ * weather and farming advice in fluent Urdu. Fish publishes no Saraiki
+ * voice, so this is the closest a free voice gets: the Urdu voice reads the
+ * Urdu advice.
  */
-const VOICES = ['ur-PK-Wavenet-A', 'ur-PK-Wavenet-B', 'ur-PK-Standard-A'];
+const VOICE_ID = '1737c90ee182475ebefdd4684b6ab1f6';
 
-/** The language the advice is written in. Google publishes no Saraiki voice. */
-const LANGUAGE_CODE = 'ur-PK';
+/** The free model: $0, for testing, prototyping and small use. */
+const MODEL = 's2.1-pro-free';
+
+/** The language the advice is written in. Fish publishes no Saraiki voice. */
+const LANGUAGE = 'ur';
 
 /**
  * How much text one request may carry.
@@ -77,12 +83,13 @@ const MAX_TEXT_CHARS = 500;
  *
  * The advice is written to be heard in a field, not skimmed on a screen, so
  * it reads a quarter slower. The client may pass its own rate; the default
- * is this one.
+ * is this one. Fish Audio's prosody speed runs 0.5 to 2.0, so a rate below
+ * 0.5 is raised to 0.5 rather than refused.
  */
 const SPEAKING_RATE = 0.8;
 
-/** Google Cloud Text-to-Speech, synthesis endpoint. */
-const TTS_URL = 'https://texttospeech.googleapis.com/v1/text:synthesize';
+/** Fish Audio, text-to-speech endpoint. */
+const TTS_URL = 'https://api.fish.audio/v1/tts';
 
 type Synthesis =
   | { audio: Uint8Array }
@@ -94,6 +101,9 @@ type Synthesis =
  * Returns the MP3 bytes, or an error with the status the client should see.
  * A missing key is a 503 — the service is not configured, which the app
  * answers by falling back to the voice it carries, not by failing the press.
+ * Fish Audio returns the audio as a stream of MP3 bytes, not as JSON, so the
+ * body is read as bytes; an error answer is JSON, and only its status is
+ * used, never its text.
  */
 async function synthesise(text: string, speakingRate: number): Promise<Synthesis> {
   const key = Deno.env.get(TTS_KEY_ENV) ?? null;
@@ -101,54 +111,50 @@ async function synthesise(text: string, speakingRate: number): Promise<Synthesis
     return { error: 'The voice service is not configured on the server.', status: 503 };
   }
 
-  for (const voice of VOICES) {
-    const response = await fetch(TTS_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        /* The key travels in a header, not in the URL — a URL is logged, a
-           header is not. */
-        'X-Goog-Api-Key': key,
-      },
-      body: JSON.stringify({
-        input: { text },
-        voice: { languageCode: LANGUAGE_CODE, name: voice },
-        audioConfig: { audioEncoding: 'MP3', speakingRate },
-      }),
-    });
+  const response = await fetch(TTS_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      /* The key travels in a header, not in the URL — a URL is logged, a
+         header is not. */
+      Authorization: `Bearer ${key}`,
+      /* The model travels in its own header, not in the body — that is how
+         Fish Audio selects it, and a body field of the same name is ignored. */
+      model: MODEL,
+    },
+    body: JSON.stringify({
+      text,
+      language: LANGUAGE,
+      reference_id: VOICE_ID,
+      format: 'mp3',
+      mp3_bitrate: 64,
+      normalize: true,
+      prosody: { speed: speakingRate },
+    }),
+  });
 
-    if (response.ok) {
-      const data = (await response.json()) as { audioContent?: unknown };
-      if (typeof data.audioContent !== 'string' || data.audioContent.length === 0) {
-        return { error: 'The voice service returned no audio.', status: 502 };
-      }
-      const binary = atob(data.audioContent);
-      const bytes = new Uint8Array(binary.length);
-      for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.charCodeAt(index);
-      }
-      return { audio: bytes };
+  if (response.ok) {
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength === 0) {
+      return { error: 'The voice service returned no audio.', status: 502 };
     }
-
-    /*
-     * Only a 400 is a property of the voice name — this voice does not exist,
-     * so the next one is tried. A bad key (401/403), a limit (429) or a
-     * server error is not fixed by another voice, and retrying it would bill
-     * the same failure three times.
-     */
-    if (response.status !== 400) {
-      const status = response.status === 401 || response.status === 403 ? 503 : 502;
-      return {
-        error:
-          response.status === 401 || response.status === 403
-            ? 'The voice service key is not valid on the server.'
-            : `The voice service could not speak (${response.status}).`,
-        status,
-      };
-    }
+    return { audio: new Uint8Array(buffer) };
   }
 
-  return { error: 'No Urdu voice is available from the voice service.', status: 502 };
+  /*
+   * A bad key (401/403) is not fixed by retrying, and a limit (429) or a
+   * server error is not fixed by another voice — there is only one voice
+   * here — so every refusal is reported at once instead of being retried
+   * three times. The app answers any of these by falling back to the voice
+   * it carries, so a refused press still speaks, only slower.
+   */
+  if (response.status === 401 || response.status === 403) {
+    return { error: 'The voice service key is not valid on the server.', status: 503 };
+  }
+  return {
+    error: `The voice service could not speak (${response.status}).`,
+    status: 502,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -159,7 +165,7 @@ Deno.serve(async (req) => {
     return json({
       ok: true,
       configured: (Deno.env.get(TTS_KEY_ENV) ?? null) !== null,
-      voice: VOICES[0],
+      voice: VOICE_ID,
     });
   }
 
@@ -171,7 +177,7 @@ Deno.serve(async (req) => {
 
   const speakingRate =
     typeof body?.speakingRate === 'number' && Number.isFinite(body.speakingRate)
-      ? Math.min(2, Math.max(0.25, body.speakingRate))
+      ? Math.min(2, Math.max(0.5, body.speakingRate))
       : SPEAKING_RATE;
 
   const result = await synthesise(text, speakingRate);
