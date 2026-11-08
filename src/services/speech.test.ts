@@ -109,14 +109,24 @@ function removeSpeechEngine() {
  * how the "no endpoint" path is exercised.
  */
 const CLOUD_URL = 'https://example.supabase.co/functions/v1/speak';
+/* The deployed function checks the project's anon key, so a test that
+   expects a request must carry one — and an endpoint with no key is the
+   case that used to fall through to the 63 MB model. */
+const CLOUD_KEY = 'test-anon-key';
 let savedEndpoint = serviceConfig.speakEndpoint;
+let savedAnonKey = serviceConfig.supabase.anonKey;
 
 function setCloudEndpoint(url: string | null): void {
   serviceConfig.speakEndpoint = { url, configured: url !== null };
 }
 
+function setCloudKey(key: string | null): void {
+  serviceConfig.supabase.anonKey = key;
+}
+
 function restoreCloudEndpoint(): void {
   serviceConfig.speakEndpoint = savedEndpoint;
+  serviceConfig.supabase.anonKey = savedAnonKey;
 }
 
 /**
@@ -149,8 +159,10 @@ function installCloudServer(
   answer: 'ok' | 'error' | 'empty' | 'throw' = 'ok',
 ) {
   const calls: string[] = [];
-  const fetchMock = vi.fn(async (url: string) => {
+  const inits: unknown[] = [];
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(url);
+    inits.push(init);
     if (answer === 'throw') throw new Error('network down');
     if (answer === 'error') return { ok: false, status: 503, blob: async () => new Blob() };
     if (answer === 'empty') return { ok: true, status: 200, blob: async () => new Blob() };
@@ -161,7 +173,7 @@ function installCloudServer(
     };
   });
   vi.stubGlobal('fetch', fetchMock);
-  return { calls, fetchMock };
+  return { calls, inits, fetchMock };
 }
 
 afterEach(() => {
@@ -179,17 +191,34 @@ describe('fetchCloudAudio fetches one part as MP3', () => {
 
   it('returns the MP3 blob on success', async () => {
     setCloudEndpoint(CLOUD_URL);
-    const { calls } = installCloudServer();
+    setCloudKey(CLOUD_KEY);
+    const { calls, inits } = installCloudServer();
     const audio = await fetchCloudAudio('صاف آسمان ہے۔');
     expect(audio).not.toBeNull();
     expect(audio?.size).toBeGreaterThan(0);
     expect(audio?.type).toBe('audio/mpeg');
     expect(calls).toHaveLength(1);
     expect(calls[0]).toBe(CLOUD_URL);
+    /* The deployed function checks the key: without these headers the
+       call answers 401 and the pill falls back to the 63 MB model. */
+    const headers = (inits[0] as RequestInit | undefined)?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(headers?.Authorization).toBe(`Bearer ${CLOUD_KEY}`);
+    expect(headers?.apikey).toBe(CLOUD_KEY);
+  });
+
+  it('returns null with an endpoint but no key and makes no request', async () => {
+    setCloudEndpoint(CLOUD_URL);
+    setCloudKey(null);
+    const { fetchMock } = installCloudServer();
+    expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns null when the server answers with an error', async () => {
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     const { fetchMock } = installCloudServer('error');
     expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -197,12 +226,14 @@ describe('fetchCloudAudio fetches one part as MP3', () => {
 
   it('returns null when the network fails', async () => {
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     installCloudServer('throw');
     expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
   });
 
   it('returns null when the server answers with empty audio', async () => {
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     installCloudServer('empty');
     expect(await fetchCloudAudio('صاف آسمان ہے۔')).toBeNull();
   });
@@ -218,6 +249,7 @@ describe('speakWithCloudVoice reads with the server voice', () => {
 
   it('returns true once the first part is playing', async () => {
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     installCloudServer();
     const restoreAudio = installAudioElement();
     const started: number[] = [];
@@ -234,6 +266,7 @@ describe('speakWithCloudVoice reads with the server voice', () => {
 
   it('reads only from fromPart onward, with absolute indices', async () => {
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     installCloudServer();
     const restoreAudio = installAudioElement();
     const text =

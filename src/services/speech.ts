@@ -13,7 +13,7 @@
  * · **The cloud voice first, the carried voice second, the browser's voice
  *   last.** The farmer asked for a real voice, not a robotic one, and for it
  *   to answer fast on a village connection. So the cloud voice reads first:
- *   Google Cloud Text-to-Speech, made on the server (`supabase/functions/
+ *   Fish Audio, made on the server (`supabase/functions/
  *   speak`), a few kilobytes of MP3 per sentence — no 63 MB model to
  *   download, no key on the device. When the server voice cannot run, the
  *   app's own Urdu voice reads instead — Piper's neural voice
@@ -55,14 +55,14 @@
  *   own headers it answers **404 `text/html`**, which Chrome then refuses as
  *   `ERR_BLOCKED_BY_ORB` — verified in this app's own network log.
  *
- *   The cloud voice is the one that runs: Google Cloud Text-to-Speech
- *   (`ur-PK-Wavenet-A`), made by the `speak` Edge Function, whose key lives
- *   only on the server. There is no Saraiki voice from Google either
- *   (checked: no `skr` in its list), so the Urdu voice reads the Urdu
- *   advice. Piper is the fallback now, not the voice: its Urdu model
- *   (`ur_PK-aegis_female-medium`, 63 MB) is fetched from the public Piper
- *   voices release only when the server voice cannot run, and the phonemiser
- *   and the model's configuration are served from this app's own origin.
+ *   The cloud voice is the one that runs: Fish Audio (Ayesha, an Urdu
+ *   voice), made by the `speak` Edge Function, whose key lives only on the
+ *   server. There is no Saraiki voice from Fish either (checked: no Saraiki
+ *   in its library), so the Urdu voice reads the Urdu advice. Piper is the
+ *   fallback now, not the voice: its Urdu model (`ur_PK-aegis_female-medium`,
+ *   63 MB) is fetched from the public Piper voices release only when the
+ *   server voice cannot run, and the phonemiser and the model's
+ *   configuration are served from this app's own origin.
  *
  * The speech recogniser is *not* here: `ScanScreen` owns that, because it is a
  * control on a screen rather than a capability of the app.
@@ -456,7 +456,7 @@ export async function speakWithAppVoice(
 }
 
 /* --------------------------------------------------------------------------
-   The cloud voice — Google Cloud Text-to-Speech, made on the server.
+   The cloud voice — Fish Audio, made on the server.
    -------------------------------------------------------------------------- */
 
 /**
@@ -483,11 +483,22 @@ export function cloudVoiceEndpoint(): string | null {
  */
 export async function fetchCloudAudio(text: string): Promise<Blob | null> {
   const endpoint = cloudVoiceEndpoint();
-  if (!endpoint) return null;
+  /* The function is deployed with JWT verification, so it refuses a call
+     with no key — a bare 401 the caller reads as "the server voice cannot
+     run" and falls back to the 63 MB model, which is how the pill ends up
+     stuck on "Loading voice…". The anon key is the project's public client
+     key, already in this bundle, and it is what the gateway checks. Without
+     it there is nothing to send, so the call is not made at all. */
+  const anonKey = serviceConfig.supabase.anonKey;
+  if (!endpoint || !anonKey) return null;
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${anonKey}`,
+        apikey: anonKey,
+      },
       body: JSON.stringify({ text }),
     });
     if (!response.ok) return null;

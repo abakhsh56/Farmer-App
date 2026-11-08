@@ -121,10 +121,18 @@ function removeSpeechEngine() {
  * how the existing tests exercise the fall-through to Piper and the browser.
  */
 const CLOUD_URL = 'https://example.supabase.co/functions/v1/speak';
+/* The deployed function checks the project's anon key, so a test that
+   expects a request must carry one. */
+const CLOUD_KEY = 'test-anon-key';
 const savedEndpoint = serviceConfig.speakEndpoint;
+const savedAnonKey = serviceConfig.supabase.anonKey;
 
 function setCloudEndpoint(url: string | null): void {
   serviceConfig.speakEndpoint = { url, configured: url !== null };
+}
+
+function setCloudKey(key: string | null): void {
+  serviceConfig.supabase.anonKey = key;
 }
 
 /**
@@ -207,6 +215,7 @@ afterEach(() => {
   piperMock.synthesiseResult = false;
   vi.unstubAllGlobals();
   serviceConfig.speakEndpoint = savedEndpoint;
+  serviceConfig.supabase.anonKey = savedAnonKey;
 });
 
 describe('the browser fallback never reads Urdu in English', () => {
@@ -282,6 +291,7 @@ describe('the cloud voice is tried first', () => {
   it('reads with the server voice and never reaches Piper or the browser', async () => {
     const engine = installSpeechEngine('start', [voice('ur-PK', 'Urdu (Pakistan)')]);
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     const { calls } = installCloudServer();
     const restoreAudio = installAudioElement();
     piperMock.synthesiseResult = true;
@@ -306,6 +316,7 @@ describe('the cloud voice is tried first', () => {
     const urdu = voice('ur-PK', 'Urdu (Pakistan)');
     const engine = installSpeechEngine('start', [urdu]);
     setCloudEndpoint(CLOUD_URL);
+    setCloudKey(CLOUD_KEY);
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new Error('network down');
     }));
