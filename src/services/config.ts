@@ -46,9 +46,12 @@ import { demoAuth } from './demoAuth';
  *   works before any account exists; chosen explicitly rather than guessed.
  * · `development` — the fixture, which is what the tests run against.
  *
- * `auto` (the default) means "the normalised table if there is a backend,
- * otherwise the fixture": an unconfigured build must never silently start making
- * network calls.
+ * `auto` means "the normalised table if there is a backend, otherwise the
+ * fixture": an unconfigured build must never silently start making network
+ * calls. It is not the default in practice: when no provider is named the build
+ * resolves to `open-meteo`, because the normalised table is empty until weather
+ * ingestion runs — `supabase` is an explicit choice, made once ingestion is
+ * filling the table for the farmer's area.
  */
 export type WeatherSource = 'auto' | 'development' | 'open-meteo' | 'supabase';
 
@@ -107,17 +110,35 @@ const BUILD_ENV = {
 
 type BuildEnvKey = keyof typeof BUILD_ENV;
 
-function read(key: BuildEnvKey): string | null {
-  const value = BUILD_ENV[key];
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
+/**
+ * Build the service configuration from one environment record.
+ *
+ * Exported (rather than only run once at import) so the gateway switch is
+ * testable: the derivation of an endpoint from the Supabase URL is exactly the
+ * kind of wiring that silently fails in a shipped build, and a test that feeds
+ * in a record is the only place it can be asserted without a deployment.
+ */
+export function buildServiceConfig(
+  env: Record<BuildEnvKey, string | undefined> = BUILD_ENV,
+): ServiceConfig {
+  const read = (key: BuildEnvKey): string | null => {
+    const value = env[key];
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  };
 
-function build(): ServiceConfig {
   const supabaseUrl = read('VITE_SUPABASE_URL');
   const supabaseAnonKey = read('VITE_SUPABASE_ANON_KEY');
-  const aiEndpoint = read('VITE_AI_ENDPOINT');
+  // The AI gateway lives on this same project, so its URL is derived from the
+  // Supabase URL exactly like the voice endpoint below — a separate variable
+  // is a second thing to forget on a deployment, and forgetting it left the
+  // assistant and the scan diagnosis on the scripted development provider
+  // even with a backend configured. An explicit VITE_AI_ENDPOINT still wins,
+  // so a deployment can point the app at a different gateway.
+  const aiEndpoint =
+    read('VITE_AI_ENDPOINT') ??
+    (supabaseUrl ? `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/ai` : null);
   const otpEndpoint = read('VITE_OTP_ENDPOINT');
   const dealerEndpoint = read('VITE_DEALER_ENDPOINT');
   const weatherIngestEndpoint = read('VITE_WEATHER_INGEST_ENDPOINT');
@@ -175,7 +196,7 @@ function build(): ServiceConfig {
   };
 }
 
-export const serviceConfig: ServiceConfig = build();
+export const serviceConfig: ServiceConfig = buildServiceConfig();
 
 /**
  * What is running in development mode right now.

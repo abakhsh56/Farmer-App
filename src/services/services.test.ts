@@ -505,9 +505,13 @@ describe('registry selection', () => {
     expect(typeof services.otp.identity).toBe('function');
 
     /*
-     * The assistant is still a separate deployment. Nothing about a database
-     * makes a gateway exist, so claiming one would be pretending a feature works
-     * before it does.
+     * The assistant is still chosen independently by the registry: nothing in
+     * the backend flag alone makes a gateway exist, so a config that names no
+     * AI endpoint keeps the scripted provider. The gateway URL itself is
+     * derived from the project URL in `buildServiceConfig` (see
+     * `config.test.ts`) — the derivation lives in config, not here, which is
+     * why this literal config, with no endpoint named, still resolves to the
+     * development provider.
      */
     expect(services.ai.name).toContain('Development');
   });
