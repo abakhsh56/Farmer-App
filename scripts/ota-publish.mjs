@@ -22,7 +22,7 @@
  * changes) while a normal launch makes no download at all.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -71,17 +71,32 @@ function gh(args) {
 const { env } = parseArgs(process.argv);
 const tag = CHANNELS[env];
 
+/**
+ * Named explicitly rather than inferred from `origin`: this checkout's remote is a
+ * different account's copy of the app, and `gh` follows that remote — which is how
+ * a release got asked for on the wrong repository the first time.
+ */
+const REPO = 'abakhsh56/Farmer-App';
+
 const sha = git(['rev-parse', '--short', 'HEAD']);
 const builtAt = new Date().toISOString();
 const bundleId = `${sha}-${builtAt.replace(/[-:.TZ]/g, '').slice(0, 14)}`;
 
 console.log(`ota-publish: building the ${env} web bundle…`);
-execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
-  cwd: ROOT,
-  env: { ...process.env, VITE_APP_ENV: env },
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
-});
+// The tools are run through `node` and their own entry scripts rather than through
+// npm: this project has an `npm` package in node_modules, so a shell resolves
+// `npm` to that shim and dies with "Cannot find module …/node_modules/npm/bin".
+const buildEnv = { ...process.env, VITE_APP_ENV: env };
+const run = (script, args) => {
+  const result = spawnSync(process.execPath, [join(ROOT, 'node_modules', ...script), ...args], {
+    cwd: ROOT,
+    env: buildEnv,
+    stdio: 'inherit',
+  });
+  if (result.status !== 0) fail(`${script.join('/')} exited with ${result.status}.`);
+};
+run(['typescript', 'bin', 'tsc'], ['--noEmit']);
+run(['vite', 'bin', 'vite.js'], ['build']);
 
 const zip = zipDirectory(DIST);
 const checksum = createHash('sha256').update(zip).digest('hex');
@@ -113,16 +128,16 @@ console.log(`ota-publish: bundle ${bundleId} — ${(zip.length / 1024 / 1024).to
  * The release is created once and reused. `--clobber` replaces the two assets,
  * which is what keeps the download URL stable for every phone already installed.
  */
-const existing = gh(['release', 'view', tag]);
+const existing = gh(['release', 'view', tag, '--repo', REPO]);
 if (!existing.ok) {
   const notes = `Live-update channel for ${env}. Assets are replaced by \`npm run ota:publish -- --env ${env}\`; installed apps poll \`latest.json\` from this release.`;
-  const created = gh(['release', 'create', tag, '--title', `OTA ${env}`, '--notes', notes]);
+  const created = gh(['release', 'create', tag, '--repo', REPO, '--title', `OTA ${env}`, '--notes', notes]);
   if (!created.ok) {
     fail(`could not create the "${tag}" release.`, `  gh said: ${created.out.trim()}\n  Is \`gh auth status\` logged in with push rights to abakhsh56/Farmer-App?`);
   }
 }
 
-const uploaded = gh(['release', 'upload', tag, zipPath, manifestPath, '--clobber']);
+const uploaded = gh(['release', 'upload', tag, '--repo', REPO, zipPath, manifestPath, '--clobber']);
 if (!uploaded.ok) fail(`could not upload the bundle to "${tag}".`, `  gh said: ${uploaded.out.trim()}`);
 
 rmSync(zipPath, { force: true });

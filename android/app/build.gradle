@@ -81,10 +81,22 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
+// Firebase's client file declares one package — `pk.agrishop.farmer`, the production
+// id. The `.dev` and `.staging` installs are different application ids, and the
+// Google Services plugin fails the build rather than leaving push unconfigured
+// ("No matching client found for package name 'pk.agrishop.farmer.dev'"). Push is a
+// production feature, and inventing a client entry for the other two would mean a
+// Firebase registration that cannot work, so their services tasks are switched off
+// and those builds simply register for nothing.
 try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {
         apply plugin: 'com.google.gms.google-services'
+        tasks.whenTaskAdded { task ->
+            if (task.name.contains('GoogleServices') && !task.name.contains('Production')) {
+                task.enabled = false
+            }
+        }
     }
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
