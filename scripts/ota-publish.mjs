@@ -99,16 +99,12 @@ run(['typescript', 'bin', 'tsc'], ['--noEmit']);
 run(['vite', 'bin', 'vite.js'], ['build']);
 
 /**
- * The voice folder stays out of the bundle.
+ * The voice folder stays out of the bundle, if a build ever puts one back.
  *
- * It is 79 MB of the app — 63 MB of model plus the phonemiser's espeak data — and
- * an OTA bundle is downloaded whole by every phone. Leaving it in means re-sending
- * it for a change to one sentence of copy. The installed app already has it inside
- * the APK, and `src/services/piper.ts` falls back to the `voice-model-v1` tag when
- * the running bundle no longer carries it, caching those bytes like the rest.
- *
- * Nothing else is excluded: the WASM runtime and the remaining assets are what the
- * app cannot start without.
+ * The Urdu voice no longer ships with the app at all — it is made by Gemini TTS
+ * through `/api/tts` — so there is nothing to exclude today. The rule is kept
+ * because it is what makes a bundle a few MB: a model accidentally copied into
+ * `public/` again must not silently turn every update into a 79 MB download.
  */
 const VOICE_FOLDER = 'piper/';
 

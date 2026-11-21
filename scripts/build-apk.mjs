@@ -62,17 +62,19 @@ const OTA_RELEASES = 'https://github.com/abakhsh56/Farmer-App/releases/download'
 function parseArgs(argv) {
   const flags = argv.slice(2);
   let flavor = 'dev';
+  let clean = false;
   for (let i = 0; i < flags.length; i += 1) {
     if (flags[i] === '--flavor') flavor = flags[i + 1];
     else if (flags[i].startsWith('--flavor=')) flavor = flags[i].slice('--flavor='.length);
+    else if (flags[i] === '--clean') clean = true;
   }
   if (!FLAVORS[flavor]) {
     fail(`unknown flavor "${flavor}".`, `  Choose one of: ${Object.keys(FLAVORS).join(', ')}`);
   }
-  return { flavor };
+  return { flavor, clean };
 }
 
-const { flavor } = parseArgs(process.argv);
+const { flavor, clean } = parseArgs(process.argv);
 const selection = FLAVORS[flavor];
 const APK_SOURCE = selection.output;
 const APK_TARGET = selection.target;
@@ -253,6 +255,23 @@ function runWebBuild() {
 }
 
 runWebBuild();
+
+/**
+ * `--clean` throws away Gradle's intermediates first.
+ *
+ * Needed whenever what is IN the bundle changes rather than its contents: removing
+ * the 79 MB voice model left every new APK still carrying it, because the merged
+ * asset directory is incremental and the old folder survived. `cap sync` had
+ * already written the correct 2 MB, so the stale bytes were invisible until the
+ * APK was measured.
+ */
+if (clean) {
+  console.log('build-apk: gradlew clean…');
+  const cleaned = isWindowsShell
+    ? spawnSync(`"${join(ANDROID_DIR, 'gradlew.bat')}" clean`, { cwd: ANDROID_DIR, env, stdio: 'inherit', shell: true })
+    : spawnSync(join(ANDROID_DIR, 'gradlew'), ['clean'], { cwd: ANDROID_DIR, env, stdio: 'inherit' });
+  if (cleaned.status !== 0) fail(`gradlew clean failed (exit ${cleaned.status}).`);
+}
 
 console.log(`build-apk: running Gradle ${selection.task} (first run downloads dependencies)…\n`);
 

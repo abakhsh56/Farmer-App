@@ -33,7 +33,7 @@ import {
  *
  * Speaking never refuses for want of a matching voice, and takes the best voice
  * available in this order: the device's own voice for the language, then the
- * Urdu voice the app carries (Piper, on-device — `services/piper.ts`).
+ * Urdu voice the app carries (Gemini TTS through our endpoint — `services/cloudVoice.ts`).
  *
  * There is deliberately no third step, and that is a fix rather than an
  * omission. The platform's default used to be the last resort so that a pressed
@@ -148,7 +148,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
         })
         .catch((failure: unknown) => {
           /* The voice is missing and nothing was read. The next press tries
-             again — `services/piper.ts` drops the failed load on purpose. */
+             again — `services/cloudVoice.ts` does not remember a failed part. */
           console.warn('[speech] the app voice could not be used:', failure);
           setPreparing((current) => (current === id ? null : current));
           setSpeaking((current) => (current === id ? null : current));

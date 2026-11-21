@@ -168,7 +168,7 @@ export function splitForSpeech(text: string, limit = CHUNK_CHARS): string[] {
  * that answered in English — three en-US voices reading Urdu script — which a
  * farmer cannot tell apart from wrong advice. A voice for another language is
  * not a substitute for a missing one; the app's own Urdu voice
- * (`services/piper.ts`) is, and when it cannot run the right answer is silence.
+ * (`services/cloudVoice.ts`) is, and when it cannot run the right answer is silence.
  */
 
 export type SpeakOptions = {
@@ -209,7 +209,7 @@ function freeVoiceUrls(): void {
  * Resolves true once the first part is playing, false when nothing was made at
  * all. The caller does *not* hand Urdu to another voice when that happens — it
  * says nothing and lets the next press bring the model up — so a `false` here
- * means `piper.ts` has already logged the real cause.
+ * means `cloudVoice.ts` has already logged the real cause.
  *
  * **Why one part at a time.** The model runs on this thread, and it used to make
  * the whole passage before handing over a single WAV: 13 seconds of audio for the
@@ -219,9 +219,9 @@ function freeVoiceUrls(): void {
  * parts are handed over in reading order and played back to back, and each break
  * lands on a sentence end, so the joins are heard as pauses rather than seams.
  *
- * The first call of a page load also pays for 63 MB of model and 18 MB of
- * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
- * offers a warm-up for a finger that is already on the pill.
+ * The voice is now made by a cloud model through this app's own endpoint, so the
+ * first press pays a round trip rather than a 79 MB download. `cloudVoice.ts`
+ * caches a part by its text and offers a warm-up for a finger already on the pill.
  */
 export async function speakWithAppVoice(
   text: string,
@@ -232,7 +232,7 @@ export async function speakWithAppVoice(
 
   const token = ++voiceToken;
 
-  const { synthesiseUrduSpeech } = await import('./piper');
+  const { synthesiseUrduSpeech } = await import('./cloudVoice');
   const element = (voicePlayer ??= new window.Audio());
   element.volume = VOICE_VOLUME;
 
@@ -325,8 +325,8 @@ export async function speakWithAppVoice(
  * Wired to the `Listen` pill's hover and focus — see `SpeechProvider.warm`.
  */
 export function warmAppVoice(text: string): void {
-  void import('./piper')
-    .then((piper) => piper.warmUrduVoice(text))
+  void import('./cloudVoice')
+    .then((voice) => voice.warmUrduVoice(text))
     .catch(() => undefined);
 }
 
