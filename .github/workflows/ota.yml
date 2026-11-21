@@ -1,0 +1,77 @@
+# Live updates: publish the web bundle to each environment's own channel.
+#
+# One channel per environment, one release tag per channel. A push to the branch
+# that names an environment publishes that environment's bundle; installed apps on
+# that channel pick it up on their next launch, so nothing is reinstalled.
+#
+#   development  →  ota-dev
+#   staging      →  ota-staging
+#   main         →  ota-production
+#
+# The build needs the same client values the environment runs with, so the five
+# VITE_ variables are read from repository secrets (Settings → Secrets and
+# variables → Actions). If they are absent the publish is skipped rather than
+# shipping a bundle with an empty backend configuration — the installed app keeps
+# the bundle it already has, which is the safe outcome.
+#
+# The three APKs embed the same five values at build time; this workflow only
+# replaces the web layer, so a plugin or permission change still needs a new APK.
+
+name: OTA bundle
+
+on:
+  push:
+    branches: [development, staging, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ota-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      VITE_MARKETPLACE_URL: ${{ secrets.VITE_MARKETPLACE_URL }}
+      VITE_MARKETPLACE_KEY: ${{ secrets.VITE_MARKETPLACE_KEY }}
+      VITE_ANALYTICS_KEY: ${{ secrets.VITE_ANALYTICS_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Map the branch to its channel
+        id: channel
+        run: |
+          case "${{ github.ref_name }}" in
+            development) echo "env=dev" >> "$GITHUB_OUTPUT" ;;
+            staging) echo "env=staging" >> "$GITHUB_OUTPUT" ;;
+            main) echo "env=production" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unknown branch ${{ github.ref_name }}"; exit 1 ;;
+          esac
+
+      - name: Refuse to publish an unconfigured bundle
+        if: env.VITE_SUPABASE_URL == ''
+        run: |
+          echo "::warning::VITE_* secrets are not set, so the ${{ steps.channel.outputs.env }} bundle was not published."
+          echo "Nothing was uploaded; installed apps keep their current bundle."
+          exit 0
+
+      - name: Build, pack and publish
+        if: env.VITE_SUPABASE_URL != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx --yes tsx scripts/ota-publish.mjs --env "${{ steps.channel.outputs.env }}" || \
+            node scripts/ota-publish.mjs --env "${{ steps.channel.outputs.env }}"

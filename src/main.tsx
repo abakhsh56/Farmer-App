@@ -19,6 +19,7 @@ import '@fontsource/noto-naskh-arabic/arabic-400.css';
 import '@/styles/theme.css';
 import { App } from '@/App';
 import { initAnalytics } from '@/services/analytics';
+import { startLiveUpdates } from '@/services/liveUpdate';
 
 const container = document.getElementById('root');
 
@@ -30,6 +31,12 @@ if (!container) {
 // and called unconditionally because it no-ops when no key is configured: an
 // unconfigured build makes no network call at all.
 initAnalytics();
+
+// The installed Android app moves to a newer web bundle from its environment's
+// channel without being reinstalled. A browser has nothing to do here — it fetches
+// that deployment's files — so this is a no-op off the native platform, and it
+// never blocks the first render.
+startLiveUpdates();
 
 createRoot(container).render(
   <StrictMode>
