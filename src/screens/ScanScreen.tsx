@@ -1,16 +1,18 @@
-import {
-  Camera,
+import { Camera,
   ChevronLeft,
   Image as ImageIcon,
   Leaf,
+  MessageCircle,
   Mic,
   Send,
   ShieldAlert,
   Volume2,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { useAiCredits } from '@/aiagent/AiCreditsProvider';
 import { SectionLabel } from '@/components/SectionLabel';
-import { LoadingState } from '@/components/States';
+import { EmptyState, LoadingState } from '@/components/States';
 import { useCredit } from '@/credit/CreditProvider';
 import { dealerNameKey } from '@/data/dealers';
 import { useLocation } from '@/location/LocationProvider';
@@ -33,7 +35,7 @@ import { useLocale } from '@/i18n/LocaleProvider';
 import type { MessageKey } from '@/i18n/catalog';
 import { formatMoney, formatNumber, formatRelativeTime, intlLocale } from '@/i18n/format';
 
-type Step = 'capture' | 'crop' | 'symptom' | 'analysing' | 'result';
+type Step = 'capture' | 'crop' | 'symptom' | 'analysing' | 'blocked' | 'result';
 
 /**
  * The platform's speech recogniser, which the DOM typings do not carry. Declared
@@ -110,9 +112,23 @@ function verdictFromAnswer(answer: AiAnswer): Verdict {
   };
 }
 
-export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
+export function ScanScreen({
+  onOpenDealers,
+  onOpenAgent,
+}: {
+  onOpenDealers: () => void;
+  /** The conversational half of the same tab. */
+  onOpenAgent?: () => void;
+}) {
   const { t, locale } = useLocale();
   const credit = useCredit();
+  /*
+   * The daily allowance. A photo analysis is the expensive AI action, so it is
+   * charged here — before the result is produced — and a farmer without the
+   * credits is told so instead of being shown a diagnosis the ledger did not
+   * record. The follow-up questions below charge as conversation.
+   */
+  const aiCredits = useAiCredits();
   const services = useServices();
   const { requestIdentity } = useSession();
   const [step, setStep] = useState<Step>('capture');
@@ -167,6 +183,20 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
   };
 
   /**
+   * Leaving the questionnaire for the analysis is the moment the AI work is
+   * actually requested, so it is the moment the allowance is spent. A refusal
+   * lands on its own screen: the farmer is not shown a spinner for work that was
+   * never going to happen.
+   */
+  const startAnalysis = () => {
+    if (!aiCredits.spend('scan')) {
+      setStep('blocked');
+      return;
+    }
+    setStep('analysing');
+  };
+
+  /**
    * The follow-up goes to the real assistant, not to a second gate copy in the
    * screen. The crop the farmer selected is the one the answer should be about;
    * the gateway adds the authenticated farmer's crops, district and interests.
@@ -175,6 +205,12 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
    */
   const askAssistant = async (text: string) => {
     if (thinking) return;
+    /* One turn, one credit — the same price as a turn in the assistant, because it
+       is the same assistant answering. */
+    if (!aiCredits.spend('chat')) {
+      toast.error(t(aiCredits.refusedReason('chat') ?? 'agent.credits.exhausted'));
+      return;
+    }
     setThinking(true);
     setFallback(false);
     const id = nextTurnId.current++;
@@ -254,6 +290,26 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
           <ImageIcon className="size-4.5" aria-hidden />
           {t('scan.gallery')}
         </Button>
+
+        {/* The other way to ask. Same tab, same services, same allowance — a
+            farmer who would rather describe the problem than photograph it. */}
+        {onOpenAgent ? (
+          <Button
+            variant="outline"
+            className="mt-2 h-12 w-full rounded-md"
+            onClick={onOpenAgent}
+          >
+            <MessageCircle className="size-4.5" aria-hidden />
+            {t('scan.openAgent')}
+          </Button>
+        ) : null}
+
+        <p className="mt-3 text-caption text-muted-foreground">
+          {t('agent.credits.costs', {
+            chat: aiCredits.costOf('chat'),
+            scan: aiCredits.costOf('scan'),
+          })}
+        </p>
       </div>
     );
   }
@@ -311,12 +367,45 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
           ))}
         </Choicebox>
 
-        <Button
-          className="mt-auto h-12 w-full rounded-md"
-          onClick={() => setStep(isCrop ? 'symptom' : 'analysing')}
-        >
+        <Button className="mt-auto h-12 w-full rounded-md" onClick={() => (isCrop ? setStep('symptom') : startAnalysis())}>
           {t('common.next')}
         </Button>
+      </div>
+    );
+  }
+
+  if (step === 'blocked') {
+    return (
+      <div className="flex h-full flex-col px-4 pt-4 pb-6">
+        <header className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={t('common.back')}
+            onClick={back}
+            className="-ms-2 grid size-9 shrink-0 place-items-center rounded-full"
+          >
+            <ChevronLeft className="size-5 rtl:rotate-180" aria-hidden />
+          </button>
+          <h1 className="text-title">{t('scan.title')}</h1>
+        </header>
+
+        <EmptyState
+          icon={ShieldAlert}
+          title={t(aiCredits.refusedReason('scan') ?? 'agent.credits.exhausted')}
+          body={t('agent.credits.blockedBody', {
+            left: formatNumber(aiCredits.remaining, locale),
+            cost: aiCredits.costOf('scan'),
+            time: new Intl.DateTimeFormat(intlLocale(locale), {
+              hour: 'numeric',
+              minute: '2-digit',
+            }).format(new Date(aiCredits.resetsAt)),
+          })}
+          action={
+            <Button variant="outline" className="h-11 rounded-full" onClick={() => setStep('capture')}>
+              {t('agent.credits.backToStart')}
+            </Button>
+          }
+        />
       </div>
     );
   }

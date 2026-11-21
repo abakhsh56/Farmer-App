@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#FAF9F5" />
+    <!-- The weather call is the first remote read on Home; warming its TLS
+         connection here saves a handshake on the screen that needs it most. -->
+    <link rel="preconnect" href="https://api.open-meteo.com" crossorigin />
     <title>App</title>
   </head>
   <body>

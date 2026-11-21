@@ -168,6 +168,39 @@ describe('community feed', () => {
   });
 });
 
+/*
+ * The For you tab: the advice panel that used to sit inside Home's crop card,
+ * moved beside the community reports it belongs with. Home keeps the crop watch
+ * list and the scanner, so the split is what these tests are about.
+ */
+describe('community for you', () => {
+  const WATCH = /happening around your crop/i;
+
+  it('sits next to Cotton, and leaves the crop watch on Home', async () => {
+    render(<App />);
+
+    // Home still closes with the watch list — only the advice panel moved.
+    expect(await screen.findByText(WATCH)).toBeInTheDocument();
+
+    await openCommunity();
+
+    const chips = screen.getByRole('button', { name: 'All' }).closest('ul') as HTMLElement;
+    expect(within(chips).getAllByRole('button').map((chip) => chip.textContent)).toEqual([
+      'All',
+      'Questions',
+      'Cotton',
+      'For you',
+    ]);
+
+    await userEvent.click(screen.getByRole('button', { name: 'For you' }));
+
+    // The watch list stayed on Home; it is not repeated in this view.
+    expect(screen.queryByText(WATCH)).not.toBeInTheDocument();
+    // The feed is still here, because For you is a view over it, not a filter.
+    expect(screen.getByText(POST1)).toBeInTheDocument();
+  });
+});
+
 describe('community threads', () => {
   it('opens a post and shows the whole conversation', async () => {
     render(<App />);

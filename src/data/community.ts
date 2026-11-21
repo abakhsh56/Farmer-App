@@ -84,7 +84,7 @@ export const KINDS: ReadonlyArray<{ id: PostKind; labelKey: MessageKey }> = [
  * live together so adding a chip is adding one row here — the screen renders
  * whatever is in this array.
  */
-export type FilterId = 'all' | 'questions' | 'cotton';
+export type FilterId = 'all' | 'questions' | 'cotton' | 'for_you';
 
 export const FILTERS: ReadonlyArray<{
   id: FilterId;
@@ -102,6 +102,12 @@ export const FILTERS: ReadonlyArray<{
     labelKey: 'crop.cotton',
     match: (post) => post.topics.includes('cotton'),
   },
+  /*
+   * For you is a view, not a topic filter: the screen adds the farmer's
+   * crop-scoped watch section above the feed. The feed itself stays complete so
+   * the section can cluster every relevant post without a second query.
+   */
+  { id: 'for_you', labelKey: 'community.filter.forYou', match: () => true },
 ];
 
 // ── the shape of a post ─────────────────────────────────────────────────────

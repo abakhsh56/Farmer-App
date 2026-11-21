@@ -221,6 +221,40 @@ export function useProductSearch(query: ProductSearchQuery): Resource<ProductHit
   );
 }
 
+/**
+ * One dealer, read from the same search the list uses.
+ *
+ * The profile page is opened with an id and nothing else — from a dealer row, a
+ * product page, or a chat — so it has to be able to answer "who is this?" on its
+ * own. Asking the dealer service for the widest radius and picking the id keeps
+ * the profile reading the *same* projection as the list, which is what stops the
+ * two disagreeing about a shop's hours or verification. A shop the service does
+ * not return (outside the 100 km ceiling, or withdrawn) resolves to null and the
+ * screen says so rather than rendering a page of blanks.
+ */
+export function useDealer(
+  dealerId: string,
+  origin?: GeoPoint,
+): Resource<DealerSummary | null> {
+  return useResource<DealerSummary | null>(
+    `dealer:${dealerId}:${origin ? `${origin.lat.toFixed(3)},${origin.lon.toFixed(3)}` : 'profile'}`,
+    null,
+    async (services) => {
+      /*
+       * The same origin as the list. Asking with no origin at all left the server
+       * to resolve one from the account — which a guest does not have — and the
+       * function raised instead of answering, so every shop opened from a guest's
+       * list said it was "not in range".
+       */
+      const found = await services.dealer.search({ radiusKm: 100, origin });
+      return { ...found, data: found.data.find((dealer) => dealer.id === dealerId) ?? null };
+    },
+    /* An empty id means "no shop in play" — a product page opened without one
+       must not spend a request asking the service who it is. */
+    dealerId.length > 0,
+  );
+}
+
 export function useDealerProducts(dealerId: string | null): Resource<DealerProduct[]> {
   return useResource<DealerProduct[]>(
     `products:${dealerId ?? 'none'}`,

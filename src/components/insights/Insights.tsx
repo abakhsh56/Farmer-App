@@ -17,7 +17,6 @@ import { initialsOf } from '@/lib/initials';
 import { useInsights } from '@/insights/InsightProvider';
 import { cropById, insightById, stageIsEstimate } from '@/insights/store';
 import { InsightFeedback } from './InsightFeedback';
-import { PersonalizedAdvice } from './PersonalizedAdvice';
 import { ProactiveAlert } from '@/components/alerts/ProactiveAlert';
 
 /**
@@ -62,11 +61,8 @@ export function CropCard({
   const primary = insights.primary;
   const serverRows = insights.personalized;
   const alertRows = insights.alerts;
-  const alertIds = new Set(alertRows.map((row) => row.recommendationId));
-  const adviceRows = serverRows.filter((row) => !alertIds.has(row.recommendationId));
   const serverReady =
     account !== null && insights.personalizationStatus === 'ready' && serverRows.length > 0;
-  const showsServer = serverReady && adviceRows.length > 0;
   const showsAlertPanel =
     account !== null &&
     insights.crops.length > 0 &&
@@ -119,15 +115,6 @@ export function CropCard({
           onScan={onScan}
           onOpenWeather={onOpenWeather}
           onRefresh={insights.refreshAlerts}
-        />
-      ) : null}
-
-      {showsServer ? (
-        <PersonalizedAdvice
-          rows={adviceRows.slice(0, 3)}
-          onScan={onScan}
-          onOpenWeather={onOpenWeather}
-          onRefresh={insights.refreshPersonalized}
         />
       ) : null}
 
@@ -237,7 +224,7 @@ export function CropCard({
         onClick={onScan}
         className={[
           'flex w-full items-center gap-3 text-start',
-          showsAlertPanel || showsServer || showsAdvice || showsGuestCopy || notice !== null
+          showsAlertPanel || showsAdvice || showsGuestCopy || notice !== null
             ? 'mt-3.5 border-t border-border pt-3.5'
             : '',
         ].join(' ')}

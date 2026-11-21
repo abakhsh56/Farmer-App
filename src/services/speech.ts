@@ -74,6 +74,15 @@ const CHUNK_CHARS = 180;
 const RATE = 0.95;
 
 /**
+ * A shade under full volume.
+ *
+ * Advice is read in a field, often with the phone held close, and the voice's own
+ * level is louder than a person speaking at that distance. This is the one
+ * control that makes it comfortable without making it inaudible beside a tractor.
+ */
+const VOICE_VOLUME = 0.8;
+
+/**
  * The speech engine, read through a check rather than assumed.
  *
  * `jsdom` has neither, and neither do locked-down browsers, so the capability is
@@ -214,12 +223,18 @@ function freeVoiceUrls(): void {
  * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
  * offers a warm-up for a finger that is already on the pill.
  */
-export async function speakWithAppVoice(text: string, onEnd?: () => void): Promise<boolean> {
+export async function speakWithAppVoice(
+  text: string,
+  onEnd?: () => void,
+  onFirstSound?: () => void,
+): Promise<boolean> {
   if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
+
   const token = ++voiceToken;
 
   const { synthesiseUrduSpeech } = await import('./piper');
   const element = (voicePlayer ??= new window.Audio());
+  element.volume = VOICE_VOLUME;
 
   /* One voice at a time: a newer press replaces the part still being heard. */
   element.onended = null;
@@ -232,6 +247,7 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
   let busy = false;
   let handed = 0;
   let answered = false;
+  let heard = false;
   let settle: (started: boolean) => void = () => undefined;
   const started = new Promise<boolean>((resolve) => {
     settle = resolve;
@@ -265,7 +281,16 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
     element.onerror = done;
     element.src = url;
     void element.play().then(
-      () => answer(true),
+      () => {
+        /* The first part that actually plays is the moment the farmer hears
+           something — the pump before this one may still be a sentence being
+           made, and a spinner that clears early is a lie. */
+        if (!heard && token === voiceToken) {
+          heard = true;
+          onFirstSound?.();
+        }
+        answer(true);
+      },
       done,
     );
   };
@@ -325,6 +350,7 @@ export function speakText(text: string, { lang, voice, onStart, onEnd }: SpeakOp
     utterance.lang = lang;
     if (voice) utterance.voice = voice;
     utterance.rate = RATE;
+    utterance.volume = VOICE_VOLUME;
 
     if (index === 0 && onStart) utterance.onstart = () => onStart();
     if (index === parts.length - 1) {

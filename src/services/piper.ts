@@ -65,6 +65,49 @@ type PiperVoice = {
 let voice: Promise<PiperVoice> | null = null;
 
 /**
+ * The voice file, from this browser's own cache when it already has it.
+ *
+ * The model is 63 MB, and a farmer on a weak connection paying for it twice is
+ * the difference between a feature and a data bill. HTTP caching alone does not
+ * cover it: a cleared cache, a private window, or a host that does not set
+ * long-lived headers all mean downloading it again. The Cache API keeps the
+ * bytes on the device, so only the first session pays and every later press
+ * starts from what is already here — which is what makes a press tolerable on
+ * two bars.
+ *
+ * A cache that refuses 63 MB (quota, private mode) costs a download, never the
+ * voice: every failure here falls back to the plain request below.
+ */
+const VOICE_CACHE = 'piper-voice-v1';
+
+async function readVoiceFile(url: string): Promise<ArrayBuffer> {
+  let store: Cache | null = null;
+  try {
+    store = typeof caches === 'undefined' ? null : await caches.open(VOICE_CACHE);
+  } catch {
+    store = null;
+  }
+
+  if (store) {
+    const hit = await store.match(url).catch(() => undefined);
+    if (hit) return hit.arrayBuffer();
+  }
+
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`The Urdu voice could not be read (${response.status}).`);
+
+  if (store) {
+    try {
+      await store.put(url, response.clone());
+    } catch {
+      /* Full quota, or a browser that will not store it: the voice still runs. */
+    }
+  }
+
+  return response.arrayBuffer();
+}
+
+/**
  * Brings the phonemiser in from this app's own origin.
  *
  * A `<script>` tag rather than an import, and not by preference: the published
@@ -126,15 +169,20 @@ function load(): Promise<PiperVoice> {
      * own server cannot serve that request: the bundler appends a marker to
      * runtime imports, which a file served straight off disk refuses — measured
      * as a 500 on `/piper/ort/ort-wasm-simd-threaded.mjs?import` and a warning of
-     * "no available backend found". The build this imports has the runtime
-     * inlined, so leaving the path alone is both simpler and the only version
-     * that works.
+     * "no available backend found". Left alone, the runtime resolves its own wasm
+     * through the bundler, which emits it as a hashed asset (`dist/assets/
+     * ort-wasm-…wasm`, 13.6 MB) that the page requests directly.
+     *
+     * The copy of that wasm that used to sit in `public/piper/ort` was therefore a
+     * duplicate — measured idle: a full warm-up of the voice, with the device
+     * cache cleared, requested the model, its config, the phonemiser's data and
+     * wasm, and nothing from `/piper/ort` at all. It has been removed, which takes
+     * 13.6 MB out of the shipped assets and the APK without changing how the
+     * voice loads.
      */
     if (runtime.env?.wasm) runtime.env.wasm.numThreads = 1;
 
-    const modelResponse = await fetch(MODEL_URL);
-    if (!modelResponse.ok) throw new Error(`The Urdu voice could not be read (${modelResponse.status}).`);
-    const session = await runtime.InferenceSession.create(await modelResponse.arrayBuffer(), {
+    const session = await runtime.InferenceSession.create(await readVoiceFile(MODEL_URL), {
       executionProviders: ['wasm'],
     });
 

@@ -147,8 +147,13 @@ export class DevelopmentWeatherProvider implements WeatherProvider {
         date,
         minC: 24 + i,
         maxC: 35 + i,
+        feelsMinC: 27 + i,
+        feelsMaxC: 39 + i,
         precipMm: i % 3 === 0 ? 0 : 1.4,
+        precipChancePct: i % 3 === 0 ? 5 : 60,
+        windMaxKph: 12 + i * 2,
         conditionText: i % 3 === 0 ? 'Clear' : 'Light rain',
+        conditionKey: i % 3 === 0 ? 'weather.condition.clear' : 'weather.condition.rain',
       });
     }
 
@@ -540,6 +545,18 @@ type DealerFixture = {
   yours?: boolean;
   syncState: 'fresh' | 'stale' | 'unreachable';
   syncedHoursAgo: number;
+  /*
+   * What the shop says about itself. These are the fields the dealer profile
+   * needs and the dealer list does not, filled here because the shop-side system
+   * owns them — the app must not be the place a shop's address or phone number
+   * is invented. They are optional on `DealerSummary` for the same reason: a
+   * provider that does not publish them leaves the profile section out instead of
+   * showing a blank line where a real address would be.
+   */
+  address: string;
+  phone: string;
+  about: string;
+  establishedYear: number;
 };
 
 /**
@@ -564,21 +581,21 @@ function atDistanceKm(km: number, northShare: number): GeoPoint {
 }
 
 const DEALER_FIXTURE: readonly DealerFixture[] = [
-  { id: 'dealer.aliTraders', name: 'Ali Traders', point: atDistanceKm(1.8, 0.9), tags: ['pesticide', 'fertilizer'], verifiedDaysAgo: 21, openingHours: '9am – 8pm', hours: [9, 20], accepting: true, yours: true, syncState: 'fresh', syncedHoursAgo: 2 },
-  { id: 'dealer.greenAgro', name: 'Green Agro Store', point: atDistanceKm(3.4, 0.35), tags: ['fertilizer', 'cotton'], verifiedDaysAgo: 48, openingHours: '8am – 7pm', hours: [8, 19], accepting: true, syncState: 'fresh', syncedHoursAgo: 4 },
+  { id: 'dealer.aliTraders', name: 'Ali Traders', point: atDistanceKm(1.8, 0.9), tags: ['pesticide', 'fertilizer'], verifiedDaysAgo: 21, openingHours: '9am – 8pm', hours: [9, 20], accepting: true, yours: true, syncState: 'fresh', syncedHoursAgo: 2, address: 'Main Bazaar, Ghakhar Mandi Road, Wazirabad', phone: '+92 300 8412550', about: 'Family-run input shop serving Wazirabad cotton growers since 1994. Authorised Bayer and Syngenta dealer; keeps a batch register for every pesticide sold.', establishedYear: 1994 },
+  { id: 'dealer.greenAgro', name: 'Green Agro Store', point: atDistanceKm(3.4, 0.35), tags: ['fertilizer', 'cotton'], verifiedDaysAgo: 48, openingHours: '8am – 7pm', hours: [8, 19], accepting: true, syncState: 'fresh', syncedHoursAgo: 4, address: 'Sialkot Road, near Sabzi Mandi, Wazirabad', phone: '+92 321 7740118', about: 'Fertiliser and cotton inputs, with free soil pH testing for regular customers. Delivers within the town on orders above 20 bags.', establishedYear: 2006 },
   /* A shop whose stock projection is two days old: the "this may be out of date"
      path, which is exactly what a farmer needs told rather than hidden. */
-  { id: 'dealer.wazirabadAgri', name: 'Wazirabad Agri Center', point: atDistanceKm(4.1, -0.2), tags: ['seed', 'pesticide'], verifiedDaysAgo: 90, openingHours: '9am – 9pm', hours: [9, 21], accepting: true, syncState: 'stale', syncedHoursAgo: 50 },
+  { id: 'dealer.wazirabadAgri', name: 'Wazirabad Agri Center', point: atDistanceKm(4.1, -0.2), tags: ['seed', 'pesticide'], verifiedDaysAgo: 90, openingHours: '9am – 9pm', hours: [9, 21], accepting: true, syncState: 'stale', syncedHoursAgo: 50, address: 'GT Road, opposite the railway station, Wazirabad', phone: '+92 333 2298764', about: 'Seed and pesticide dealer with an agronomist on site on weekday mornings. Stock is counted weekly, so quantities here can lag the shelf.', establishedYear: 1988 },
   /* Never verified: the row must not wear a verification badge. */
-  { id: 'dealer.malikFertilizers', name: 'Malik Fertilizers', point: atDistanceKm(5.6, 0.6), tags: ['fertilizer'], verifiedDaysAgo: null, openingHours: '8am – 6pm', hours: [8, 18], accepting: false, syncState: 'fresh', syncedHoursAgo: 3 },
+  { id: 'dealer.malikFertilizers', name: 'Malik Fertilizers', point: atDistanceKm(5.6, 0.6), tags: ['fertilizer'], verifiedDaysAgo: null, openingHours: '8am – 6pm', hours: [8, 18], accepting: false, syncState: 'fresh', syncedHoursAgo: 3, address: 'Kot Ladha Road, Wazirabad', phone: '+92 301 5567903', about: 'Fertiliser depot selling urea and DAP in bag quantities. Business details have not been verified by the platform yet.', establishedYear: 2011 },
   /* Not reached for four days: availability from this shop is unknowable. */
-  { id: 'dealer.punjabSeed', name: 'Punjab Seed Corner', point: atDistanceKm(6.2, -0.7), tags: ['seed', 'cotton'], verifiedDaysAgo: 12, openingHours: '10am – 6pm', hours: [10, 18], accepting: true, syncState: 'unreachable', syncedHoursAgo: 96 },
+  { id: 'dealer.punjabSeed', name: 'Punjab Seed Corner', point: atDistanceKm(6.2, -0.7), tags: ['seed', 'cotton'], verifiedDaysAgo: 12, openingHours: '10am – 6pm', hours: [10, 18], accepting: true, syncState: 'unreachable', syncedHoursAgo: 96, address: 'Hafizabad Road, Wazirabad', phone: '+92 345 8890221', about: 'Certified seed corner for cotton and wheat. Has not reported stock to the platform for four days.', establishedYear: 2015 },
   /*
    * 112 km away: past the product's hard ceiling. It exists so the boundary is
    * testable from the top — at the maximum radius the list must still not contain
    * it, which is only provable if there is something on the other side of the line.
    */
-  { id: 'dealer.farMandi', name: 'Far Mandi Depot', point: atDistanceKm(112, 0.99), tags: ['fertilizer'], verifiedDaysAgo: 30, openingHours: '9am – 7pm', hours: [9, 19], accepting: true, syncState: 'fresh', syncedHoursAgo: 1 },
+  { id: 'dealer.farMandi', name: 'Far Mandi Depot', point: atDistanceKm(112, 0.99), tags: ['fertilizer'], verifiedDaysAgo: 30, openingHours: '9am – 7pm', hours: [9, 19], accepting: true, syncState: 'fresh', syncedHoursAgo: 1, address: 'Mandi Road, Gujrat', phone: '+92 300 1122334', about: 'Bulk fertiliser depot on the Gujrat mandi road, beyond the app’s search ceiling.', establishedYear: 2003 },
 ];
 
 const DEALER_PRODUCTS: Readonly<Record<string, readonly DealerProduct[]>> = {
@@ -586,6 +603,7 @@ const DEALER_PRODUCTS: Readonly<Record<string, readonly DealerProduct[]>> = {
     { id: 'ali-roundup', name: 'Roundup', brand: 'Bayer', category: 'herbicide', canonicalProductId: 'roundup', registrationNo: 'DPP-PK-2019-0431', packSize: '1 L', availableQty: 14, inStock: true, unitPrice: 1850, currency: 'PKR', syncState: 'fresh' },
     /* Quantity not reported by the dealer system — unknown, never zero. */
     { id: 'ali-confidor', name: 'Confidor', brand: 'Bayer', category: 'pesticide', canonicalProductId: 'confidor', registrationNo: 'DPP-PK-2017-0228', packSize: '250 ml', availableQty: null, inStock: null, unitPrice: 1420, currency: 'PKR', syncState: 'fresh' },
+    { id: 'ali-tilt', name: 'Tilt 250 EC', brand: 'Syngenta', category: 'fungicide', canonicalProductId: 'tilt-250', registrationNo: 'DPP-PK-2016-0194', packSize: '250 ml', availableQty: 9, inStock: true, unitPrice: 2450, currency: 'PKR', syncState: 'fresh' },
   ],
   'dealer.greenAgro': [
     /* Confirmed none. The opposite of the row above, and it must look different. */
@@ -593,6 +611,15 @@ const DEALER_PRODUCTS: Readonly<Record<string, readonly DealerProduct[]>> = {
     /* The same product as Ali Traders carries, at this shop's own price: two live
        listings for one canonical product, which is what a scan result shows. */
     { id: 'green-roundup', name: 'Roundup', brand: 'Bayer', category: 'herbicide', canonicalProductId: 'roundup', registrationNo: 'DPP-PK-2019-0431', packSize: '1 L', availableQty: 6, inStock: true, unitPrice: 1880, currency: 'PKR', syncState: 'fresh' },
+    { id: 'green-dap', name: 'Sarsabz DAP', brand: 'Sarsabz', category: 'fertilizer', canonicalProductId: 'sarsabz-dap', registrationNo: 'FERT-PK-DAP-18-46', packSize: '50 kg', availableQty: 40, inStock: true, unitPrice: 11200, currency: 'PKR', syncState: 'fresh' },
+    { id: 'green-karate', name: 'Karate 2.5 EC', brand: 'Syngenta', category: 'pesticide', canonicalProductId: 'karate', registrationNo: 'DPP-PK-2018-0352', packSize: '250 ml', availableQty: 5, inStock: true, unitPrice: 1980, currency: 'PKR', syncState: 'fresh' },
+  ],
+  'dealer.wazirabadAgri': [
+    { id: 'wazirabad-tilt', name: 'Tilt 250 EC', brand: 'Syngenta', category: 'fungicide', canonicalProductId: 'tilt-250', registrationNo: 'DPP-PK-2016-0194', packSize: '250 ml', availableQty: 3, inStock: true, unitPrice: 2520, currency: 'PKR', syncState: 'stale' },
+    { id: 'wazirabad-btcotton', name: 'Bt cotton seed', brand: null, category: 'seed', canonicalProductId: 'bt-cotton-seed', registrationNo: 'DPP-PK-2020-0117', packSize: '1 kg', availableQty: 12, inStock: true, unitPrice: 1290, currency: 'PKR', syncState: 'stale' },
+  ],
+  'dealer.malikFertilizers': [
+    { id: 'malik-dap', name: 'Sarsabz DAP', brand: 'Sarsabz', category: 'fertilizer', canonicalProductId: 'sarsabz-dap', registrationNo: 'FERT-PK-DAP-18-46', packSize: '50 kg', availableQty: 25, inStock: true, unitPrice: 11450, currency: 'PKR', syncState: 'fresh' },
   ],
   'dealer.punjabSeed': [
     { id: 'punjab-btcotton', name: 'Bt cotton seed', brand: null, category: 'seed', canonicalProductId: 'bt-cotton-seed', registrationNo: 'DPP-PK-2020-0117', packSize: '1 kg', availableQty: 22, inStock: true, unitPrice: 1250, currency: 'PKR', syncState: 'unreachable' },
@@ -631,6 +658,10 @@ export class DevelopmentDealerProvider implements DealerProvider {
       syncState: d.syncState,
       syncedAt: t - d.syncedHoursAgo * HOUR,
       tags: d.tags,
+      address: d.address,
+      phone: d.phone,
+      about: d.about,
+      establishedYear: d.establishedYear,
     }))
       .filter((d) => d.distanceKm <= radius)
       .filter((d) => (query.tags?.length ? query.tags.every((tag) => d.tags.includes(tag)) : true))

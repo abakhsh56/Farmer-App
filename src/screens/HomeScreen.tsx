@@ -119,6 +119,7 @@ export function HomeScreen({
   const speech = useSpeech();
   const speechTag = LOCALE_REGISTRY.ur.tag;
   const listening = speech.speaking === 'weather';
+  const preparingVoice = speech.preparing === 'weather';
   const spokenAdvice =
     reading && weatherUsable
       ? [
@@ -150,6 +151,18 @@ export function HomeScreen({
    */
   const stopSpeech = speech.stop;
   useEffect(() => () => stopSpeech(), [stopSpeech]);
+
+  /*
+   * The voice is prepared while the card is being read, not when the pill is
+   * pressed. The advice is on screen from the moment the weather arrives, so the
+   * model can arrive and the first sentence can be made in that time — which is
+   * what turns a press into a sound instead of a wait. Warming is idempotent:
+   * the model is fetched once per session and each sentence is kept once.
+   */
+  const warmVoice = speech.warm;
+  useEffect(() => {
+    if (spokenAdvice) warmVoice(speechTag, spokenAdvice);
+  }, [warmVoice, speechTag, spokenAdvice]);
 
   /*
    * What is happening around the farmer's crop, built from the two places this
@@ -385,11 +398,21 @@ export function HomeScreen({
                   ? speech.stop()
                   : speech.speak({ id: 'weather', text: spokenAdvice, lang: speechTag })
               }
-              aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
+              aria-label={
+                preparingVoice
+                  ? t('weather.preparing')
+                  : listening
+                    ? t('weather.stopListening')
+                    : t('weather.listen')
+              }
               className="flex items-center gap-1.5 rounded-full bg-white/12 px-3 py-1.5 text-label text-white"
             >
               <Volume2 className="size-4" aria-hidden />
-              {listening ? t('weather.stopListening') : t('weather.listen')}
+              {preparingVoice
+                ? t('weather.preparing')
+                : listening
+                  ? t('weather.stopListening')
+                  : t('weather.listen')}
             </button>
           ) : null}
         </div>

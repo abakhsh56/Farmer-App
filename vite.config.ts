@@ -14,6 +14,14 @@ export default defineConfig({
     port: 5273,
     strictPort: false,
     host: '127.0.0.1',
+    /*
+     * A cold dev load is dominated by transforming the screen graph, not by the
+     * browser. Warming the entry graph when the server starts moves that work
+     * off the first navigation. It has no effect on the production build.
+     */
+    warmup: {
+      clientFiles: ['./src/main.tsx', './src/App.tsx', './src/screens/HomeScreen.tsx'],
+    },
   },
   /*
    * MapLibre parses tiles in a web worker, and it ships that worker as a module.
@@ -69,6 +77,12 @@ export default defineConfig({
        */
       VITE_SUPABASE_URL: '',
       VITE_SUPABASE_ANON_KEY: '',
+      // The marketplace is a second project with its own key; pinned empty for
+      // the same reason, and more so here: these tests must never read the
+      // production listings, and an empty key resolves the dealer service to the
+      // fixture the suites assert on.
+      VITE_MARKETPLACE_URL: '',
+      VITE_MARKETPLACE_KEY: '',
       VITE_AI_ENDPOINT: '',
       VITE_OTP_ENDPOINT: '',
       VITE_WEATHER_INGEST_ENDPOINT: '',
