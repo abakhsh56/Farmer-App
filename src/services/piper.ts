@@ -37,13 +37,53 @@ type PhonemizerFactory = (options: {
 
 type PhonemizerWindow = Window & { createPiperPhonemize?: PhonemizerFactory };
 
-/** Everything the voice needs, all under the app's own origin. */
+/** The voice's own folder when the running bundle carries it. */
 const BASE = '/piper';
 const VOICE = 'ur_PK-aegis_female-medium';
-const MODEL_URL = `${BASE}/${VOICE}.onnx`;
-const CONFIG_URL = `${BASE}/${VOICE}.onnx.json`;
-const PIPER_WASM = `${BASE}/piper_phonemize.wasm`;
-const PIPER_DATA = `${BASE}/piper_phonemize.data`;
+
+/**
+ * Where the voice lives when the bundle does not carry it.
+ *
+ * The voice is 79 MB of the app, and live updates are downloaded whole. Keeping
+ * it inside every OTA bundle would mean re-sending 79 MB to every phone for a
+ * change to a sentence of copy, so the published bundle leaves the folder out:
+ * the installed app updates in a few MB and reads the voice from here instead.
+ *
+ * A git tag rather than a branch, so the URL survives merges and renames, and a
+ * raw GitHub URL rather than a release asset because it is served with
+ * `Access-Control-Allow-Origin: *` — a release asset is not, and a WebView is a
+ * cross-origin client like any other.
+ *
+ * `VITE_VOICE_BASE` overrides it for a deployment that hosts the same five
+ * files somewhere else. A build that ships the folder (the APK does) never
+ * reads this at all: `voiceBase()` prefers what is already in the bundle.
+ */
+const MODEL_CHANNEL = (
+  (import.meta.env.VITE_VOICE_BASE as string | undefined) ??
+  'https://raw.githubusercontent.com/abakhsh56/Farmer-App/voice-model-v1/public/piper'
+).replace(/\/+$/, '');
+
+/**
+ * Which folder to read the voice from, decided once.
+ *
+ * A fresh install and the browser have the folder and pay nothing. After a live
+ * update the same paths are 404 — the update replaced the bundle — and the
+ * channel is used, cached by `readVoiceFile` exactly as the bundled copy is.
+ */
+let resolvedBase: Promise<string> | null = null;
+
+function voiceBase(): Promise<string> {
+  resolvedBase ??= (async () => {
+    try {
+      const probe = await fetch(`${BASE}/piper_phonemize.wasm`, { method: 'HEAD' });
+      if (probe.ok) return BASE;
+    } catch {
+      /* No bundled copy, or a host that refuses HEAD. Either way: the channel. */
+    }
+    return MODEL_CHANNEL;
+  })();
+  return resolvedBase;
+}
 
 /**
  * How much text one pass carries.
@@ -118,13 +158,14 @@ async function readVoiceFile(url: string): Promise<ArrayBuffer> {
  * loaded. The file itself is served from `public/piper`, alongside the espeak-ng
  * data and the `.wasm` this factory is told to find with `locateFile`.
  */
-function loadPhonemizer(): Promise<PhonemizerFactory> {
+function loadPhonemizer(base: string): Promise<PhonemizerFactory> {
   const target = window as PhonemizerWindow;
   if (target.createPiperPhonemize) return Promise.resolve(target.createPiperPhonemize);
 
   return new Promise<PhonemizerFactory>((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = `${BASE}/piper_phonemize.js`;
+    script.crossOrigin = 'anonymous';
+    script.src = `${base}/piper_phonemize.js`;
     script.onload = () => {
       const factory = target.createPiperPhonemize;
       script.remove();
@@ -145,10 +186,16 @@ function loadPhonemizer(): Promise<PhonemizerFactory> {
  */
 function load(): Promise<PiperVoice> {
   voice ??= (async () => {
+    const base = await voiceBase();
+    const modelUrl = `${base}/${VOICE}.onnx`;
+    const configUrl = `${base}/${VOICE}.onnx.json`;
+    const piperWasm = `${base}/piper_phonemize.wasm`;
+    const piperData = `${base}/piper_phonemize.data`;
+
     const [ort, factory, config] = await Promise.all([
       import('onnxruntime-web/wasm'),
-      loadPhonemizer(),
-      fetch(CONFIG_URL).then((response) => {
+      loadPhonemizer(base),
+      fetch(configUrl).then((response) => {
         if (!response.ok) throw new Error(`The voice configuration could not be read (${response.status}).`);
         return response.json() as Promise<PiperConfig>;
       }),
@@ -182,7 +229,7 @@ function load(): Promise<PiperVoice> {
      */
     if (runtime.env?.wasm) runtime.env.wasm.numThreads = 1;
 
-    const session = await runtime.InferenceSession.create(await readVoiceFile(MODEL_URL), {
+    const session = await runtime.InferenceSession.create(await readVoiceFile(modelUrl), {
       executionProviders: ['wasm'],
     });
 
@@ -229,7 +276,7 @@ function load(): Promise<PiperVoice> {
            */
           printErr: (message) => errors.push(message),
           locateFile: (url) =>
-            url.endsWith('.wasm') ? PIPER_WASM : url.endsWith('.data') ? PIPER_DATA : url,
+            url.endsWith('.wasm') ? piperWasm : url.endsWith('.data') ? piperData : url,
         })
           .then((instance) => {
             try {

@@ -8,13 +8,17 @@
  * to a bundle it cannot open. This writes the structure the format actually
  * specifies, with forward slashes, and is the same code on every machine.
  *
- * Entries are stored, not deflated. A build is a few megabytes of already
- * compressed JavaScript and web fonts; deflating it saves little and would mean
- * carrying a compressor whose output must match a CRC we compute anyway.
+ * Entries are deflated when that makes them smaller, because the whole point of
+ * the bundle is what a phone downloads over a rural connection: the bundled WASM
+ * runtime and the phonemiser's data are the two large items left once the voice
+ * model is excluded, and both compress by roughly two thirds. Anything that does
+ * not shrink (already-compressed bytes) is stored instead, since deflating it
+ * would cost time and accuracy for nothing.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 
 /** CRC-32, the checksum ZIP requires per entry. Table built once, lazily. */
 let crcTable = null;
@@ -50,7 +54,7 @@ function walk(dir, base = dir) {
 
 /** DOS date/time, which is what the format stores. */
 function dosDateTime(date) {
-  const time = ((date.getHours() & 0x1f) << 11) | ((date.getMinutes() & 0x3f) << 5) | ((date.getSeconds() / 2) & 0x1f);
+  const time = ((date.getHours() & 0x1f) << 11) | ((date.getMinutes() & 0x3f) << 5) | (Math.floor(date.getSeconds() / 2) & 0x1f);
   const day = (((date.getFullYear() - 1980) & 0x7f) << 9) | (((date.getMonth() + 1) & 0x0f) << 5) | (date.getDate() & 0x1f);
   return { time, day };
 }
@@ -58,29 +62,35 @@ function dosDateTime(date) {
 /**
  * Writes `dir` as a zip whose root is `dir`'s contents, so the bundle's
  * `index.html` sits at the archive root — the layout the plugin expects.
+ *
+ * `exclude` receives each relative path and skips what it returns true for; the
+ * publisher uses it to leave the voice folder out of the bundle.
  */
-export function zipDirectory(dir) {
-  const files = walk(dir);
+export function zipDirectory(dir, { exclude } = {}) {
+  const files = walk(dir).filter((name) => !exclude?.(name));
   const { time, day } = dosDateTime(new Date());
   const locals = [];
   const centrals = [];
   let offset = 0;
 
   for (const name of files) {
-    const data = readFileSync(join(dir, name));
+    const raw = readFileSync(join(dir, name));
+    const deflated = deflateRawSync(raw, { level: 9 });
+    const payload = deflated.length < raw.length ? deflated : raw;
+    const method = deflated.length < raw.length ? 8 : 0;
     const nameBytes = Buffer.from(name, 'utf8');
-    const crc = crc32(data);
+    const crc = crc32(raw);
 
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0);
     local.writeUInt16LE(20, 4); // version needed
     local.writeUInt16LE(0x0800, 6); // UTF-8 names
-    local.writeUInt16LE(0, 8); // stored
+    local.writeUInt16LE(method, 8);
     local.writeUInt16LE(time, 10);
     local.writeUInt16LE(day, 12);
     local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(data.length, 18);
-    local.writeUInt32LE(data.length, 22);
+    local.writeUInt32LE(payload.length, 18); // compressed size
+    local.writeUInt32LE(raw.length, 22); // uncompressed size
     local.writeUInt16LE(nameBytes.length, 26);
     local.writeUInt16LE(0, 28);
 
@@ -89,12 +99,12 @@ export function zipDirectory(dir) {
     central.writeUInt16LE(20, 4); // version made by
     central.writeUInt16LE(20, 6); // version needed
     central.writeUInt16LE(0x0800, 8);
-    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(method, 10);
     central.writeUInt16LE(time, 12);
     central.writeUInt16LE(day, 14);
     central.writeUInt32LE(crc, 16);
-    central.writeUInt32LE(data.length, 20);
-    central.writeUInt32LE(data.length, 24);
+    central.writeUInt32LE(payload.length, 20);
+    central.writeUInt32LE(raw.length, 24);
     central.writeUInt16LE(nameBytes.length, 28);
     central.writeUInt16LE(0, 30); // extra
     central.writeUInt16LE(0, 32); // comment
@@ -103,9 +113,9 @@ export function zipDirectory(dir) {
     central.writeUInt32LE(0, 38); // external attrs
     central.writeUInt32LE(offset, 42);
 
-    locals.push(local, nameBytes, data);
+    locals.push(local, nameBytes, payload);
     centrals.push(central, nameBytes);
-    offset += local.length + nameBytes.length + data.length;
+    offset += local.length + nameBytes.length + payload.length;
   }
 
   const centralSize = centrals.reduce((total, buffer) => total + buffer.length, 0);
@@ -121,5 +131,3 @@ export function zipDirectory(dir) {
 
   return Buffer.concat([...locals, ...centrals, end]);
 }
-
-export { statSync };

@@ -98,7 +98,21 @@ const run = (script, args) => {
 run(['typescript', 'bin', 'tsc'], ['--noEmit']);
 run(['vite', 'bin', 'vite.js'], ['build']);
 
-const zip = zipDirectory(DIST);
+/**
+ * The voice folder stays out of the bundle.
+ *
+ * It is 79 MB of the app — 63 MB of model plus the phonemiser's espeak data — and
+ * an OTA bundle is downloaded whole by every phone. Leaving it in means re-sending
+ * it for a change to one sentence of copy. The installed app already has it inside
+ * the APK, and `src/services/piper.ts` falls back to the `voice-model-v1` tag when
+ * the running bundle no longer carries it, caching those bytes like the rest.
+ *
+ * Nothing else is excluded: the WASM runtime and the remaining assets are what the
+ * app cannot start without.
+ */
+const VOICE_FOLDER = 'piper/';
+
+const zip = zipDirectory(DIST, { exclude: (name) => name.startsWith(VOICE_FOLDER) });
 const checksum = createHash('sha256').update(zip).digest('hex');
 
 mkdirSync(OUT, { recursive: true });
@@ -122,7 +136,9 @@ writeFileSync(
   )}\n`,
 );
 
-console.log(`ota-publish: bundle ${bundleId} — ${(zip.length / 1024 / 1024).toFixed(1)} MB, sha256 ${checksum.slice(0, 12)}…`);
+console.log(
+  `ota-publish: bundle ${bundleId} — ${(zip.length / 1024 / 1024).toFixed(1)} MB (voice folder excluded), sha256 ${checksum.slice(0, 12)}…`,
+);
 
 /**
  * The release is created once and reused. `--clobber` replaces the two assets,
