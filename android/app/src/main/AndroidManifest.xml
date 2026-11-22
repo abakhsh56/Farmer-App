@@ -22,6 +22,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!--
+                agrishop://join?code=XXXXXX, printed on a shop's sticker, and
+                agrishop://farmer?token=…, which an owner sends to one farmer.
+                Both arrive as a VIEW intent on the single running activity, so a
+                farmer who already has the app open is connected without the app
+                restarting under them.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="agrishop" />
+            </intent-filter>
+
         </activity>
 
         <provider

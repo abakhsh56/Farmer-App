@@ -52,6 +52,8 @@ import { demoAuth } from './demoAuth';
  */
 export type WeatherSource = 'auto' | 'development' | 'open-meteo' | 'supabase';
 
+export type ShopApiConfig = { url: string | null; key: string | null; configured: boolean };
+
 export type ServiceConfig = {
   supabase: { url: string | null; anonKey: string | null; configured: boolean };
   /**
@@ -64,6 +66,20 @@ export type ServiceConfig = {
    * everything else stays where it is.
    */
   marketplace: { url: string | null; key: string | null; configured: boolean };
+  /**
+   * The shop app's own backend — where the conversation with the shop lives.
+   *
+   * A third project, and a third key, because it is a third fact: the shop app is
+   * the server for the messages, credit asks and visits — the `farmer_api_*`
+   * contract — and this app is a client of it. The key is that
+   * project's anonymous key, which is public by design; the farmer's own
+   * credential — a token the shop issues — travels as a parameter, never here.
+   *
+   * Deliberately *not* defaulted to the marketplace project: a build without these
+   * two values keeps the on-device conversation it has today rather than pointing
+   * at a project that has never heard of `farmer_api_*`.
+   */
+  shopApi: ShopApiConfig;
   /** Our Edge Functions. Each may be unconfigured independently. */
   aiEndpoint: { url: string | null; configured: boolean };
   otpEndpoint: { url: string | null; configured: boolean };
@@ -95,6 +111,8 @@ const BUILD_ENV = {
   VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
   VITE_MARKETPLACE_URL: import.meta.env.VITE_MARKETPLACE_URL,
   VITE_MARKETPLACE_KEY: import.meta.env.VITE_MARKETPLACE_KEY,
+  VITE_SHOP_API_URL: import.meta.env.VITE_SHOP_API_URL,
+  VITE_SHOP_API_KEY: import.meta.env.VITE_SHOP_API_KEY,
   VITE_AI_ENDPOINT: import.meta.env.VITE_AI_ENDPOINT,
   VITE_OTP_ENDPOINT: import.meta.env.VITE_OTP_ENDPOINT,
   VITE_DEALER_ENDPOINT: import.meta.env.VITE_DEALER_ENDPOINT,
@@ -120,6 +138,8 @@ function build(): ServiceConfig {
   const supabaseAnonKey = read('VITE_SUPABASE_ANON_KEY');
   const marketplaceUrl = read('VITE_MARKETPLACE_URL');
   const marketplaceKey = read('VITE_MARKETPLACE_KEY');
+  const shopApiUrl = read('VITE_SHOP_API_URL');
+  const shopApiKey = read('VITE_SHOP_API_KEY');
   const aiEndpoint = read('VITE_AI_ENDPOINT');
   const otpEndpoint = read('VITE_OTP_ENDPOINT');
   const dealerEndpoint = read('VITE_DEALER_ENDPOINT');
@@ -148,6 +168,11 @@ function build(): ServiceConfig {
       url: marketplaceUrl,
       key: marketplaceKey,
       configured: Boolean(marketplaceUrl && marketplaceKey),
+    },
+    shopApi: {
+      url: shopApiUrl,
+      key: shopApiKey,
+      configured: Boolean(shopApiUrl && shopApiKey),
     },
     weather: {
       provider:

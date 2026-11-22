@@ -448,6 +448,7 @@ describe('registry selection', () => {
   const unconfigured: ServiceConfig = {
     supabase: { url: null, anonKey: null, configured: false },
     marketplace: { url: null, key: null, configured: false },
+    shopApi: { url: null, key: null, configured: false },
     aiEndpoint: { url: null, configured: false },
     otpEndpoint: { url: null, configured: false },
     dealerEndpoint: { url: null, configured: false },
@@ -460,6 +461,7 @@ describe('registry selection', () => {
   const configured: ServiceConfig = {
     supabase: { url: 'https://example.supabase.co', anonKey: 'anon', configured: true },
     marketplace: { url: null, key: null, configured: false },
+    shopApi: { url: null, key: null, configured: false },
     aiEndpoint: { url: 'https://example.supabase.co/functions/v1/ai', configured: true },
     otpEndpoint: { url: 'https://example.supabase.co/functions/v1/otp', configured: true },
     dealerEndpoint: { url: 'https://example.supabase.co/functions/v1/dealer', configured: true },

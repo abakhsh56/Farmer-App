@@ -31,7 +31,9 @@ import { DealerDetailScreen } from '@/screens/DealerDetailScreen';
 import { ProductDetailScreen } from '@/screens/ProductDetailScreen';
 import { WeatherScreen } from '@/screens/WeatherScreen';
 import { ShopJoinDialog } from '@/shop/ShopJoinDialog';
+import { ShopApiProvider, useShopApi } from '@/shop/ShopApiProvider';
 import { useShopJoin } from '@/shop/useShopJoin';
+import { useShopPush } from '@/shop/useShopPush';
 
 /**
  * The reviewer workspace is the one screen a farmer never opens: it is gated by
@@ -124,6 +126,14 @@ export function App({ services }: { services?: Services } = {}) {
                    * instead of one per mount.
                    */}
                   <CommunityProvider>
+                    {/*
+                      The shop sits above the chat because the chat is one of its
+                      faces: when a shop backend is configured, the conversation,
+                      the offers and the notices all come from there. Above the
+                      chat rather than inside it, so the shop survives a trip to
+                      another tab the way every other store does.
+                    */}
+                    <ShopApiProvider>
                     {/* Conversations, same idea: one chat document, opened from
                         wherever the farmer happens to be standing. */}
                     <ChatProvider>
@@ -141,6 +151,7 @@ export function App({ services }: { services?: Services } = {}) {
                         </AiCreditsProvider>
                       </SpeechProvider>
                     </ChatProvider>
+                    </ShopApiProvider>
                     <Toaster position="top-center" />
                   </CommunityProvider>
                 </InsightProvider>
@@ -197,6 +208,21 @@ function Shell() {
    * every render would restart the flow the moment it was written.
    */
   const [onboarded, setOnboarded] = useState(isOnboardingComplete);
+  /*
+   * A tap on the shop's notification opens the conversation — `data.route` is `/`,
+   * which for a farmer means exactly this. It is wired above the early return so
+   * the listener exists for the whole session, and it drives navigation through
+   * the same tab and thread state the rest of the app uses rather than through a
+   * URL the app has no router for.
+   */
+  const shop = useShopApi();
+  useShopPush(() => {
+    const shopId = shop.credential?.shopId;
+    if (shopId) chat.openThread(shopId);
+    setDetails([]);
+    setView('tabs');
+    setTab('chat');
+  });
 
   /**
    * Opening a conversation from a dealer row, the chat list or the Scan result

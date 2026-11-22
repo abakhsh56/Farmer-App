@@ -20,6 +20,7 @@ import { useDealer, useDealerProducts } from '@/services/hooks';
 import { useSession } from '@/session/SessionProvider';
 import { useVisits } from '@/visits/VisitProvider';
 import { ShopQrCard } from '@/shop/ShopQrCard';
+import { useShopApi } from '@/shop/ShopApiProvider';
 
 type Props = {
   dealerId: string;
@@ -57,6 +58,12 @@ export function DealerDetailScreen({ dealerId, onBack, onOpenChat, onOpenProduct
   const products = useDealerProducts(dealerId);
   const visits = useVisits();
   const { requestIdentity } = useSession();
+  /*
+   * When this page is the shop the farmer is actually connected to, a visit ask is
+   * a row in that shop's own backend, not a request in this phone's local book.
+   * One conversation, one record: the owner reads it in the app he already uses.
+   */
+  const shop = useShopApi();
 
   const back = (
     <header className="flex items-center gap-2 px-4 pt-4">
@@ -122,8 +129,18 @@ export function DealerDetailScreen({ dealerId, onBack, onOpenChat, onOpenProduct
   const visit = visits.forDealer(entry.id);
   const canAsk = visit === undefined || visit.status === 'rejected';
 
+  const connectedToShop = shop.configured && shop.credential?.shopId === entry.id;
+
   const askForVisit = () =>
     requestIdentity(() => {
+      if (connectedToShop) {
+        void shop.askVisit(null, null).then((ok) => {
+          if (ok) toast.success(t('shop.request.sent'));
+          else toast.error(t('shop.failed'));
+        });
+        return;
+      }
+
       const result = visits.requestVisit(entry.id);
       if (!result.ok) toast.error(t(result.error));
       else toast.success(t('visit.request.sent'));

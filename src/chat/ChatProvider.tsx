@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 import type { ChatMessage } from '@/data/chat';
+import { useShopApi } from '@/shop/ShopApiProvider';
 import { ownerFor, useOnline, usePersistentDocument } from '@/services/persistence';
 import { useSession } from '@/session/SessionProvider';
 import {
@@ -16,20 +17,23 @@ import {
 } from './store';
 
 /**
- * Holds one `ChatState`, and the one piece of navigation that goes with it: which
- * conversation is open.
+ * The farmer's conversations.
  *
- * It sits above the screens so that opening a dealer from the Home card, from the
- * dealers list or from the chat list is one destination rather than three copies,
- * and so the conversation is the same object whichever door the farmer came
- * through. Being on the service layer is what makes the history durable: the
- * threads are a document like the credit requests and the feed, written through
- * the repository, so they are still there after a reload.
+ * Two sources behind one interface, and which one you get is a build fact, not a
+ * guess: when the shop backend is configured the conversation *is* the shop's
+ * thread, read and written through `farmer_api_*`; when it is not, the app keeps
+ * the on-device conversation it has always had. The screens ask the same questions
+ * either way — which conversations exist, what was said, what is unread — so the
+ * chat screen did not have to learn a second vocabulary.
  *
- * Ownership follows the gate that already exists: sending a message asks for an
- * account, so the document belongs to the account once there is one — and a
- * conversation started before signing in migrates with it rather than being left
- * behind.
+ * The live source wins outright rather than merging with the local store, because
+ * merging would invent a history: the shop's thread is the record of what was
+ * actually said, and a bubble from the old local store has no sender on the shop's
+ * side to confirm it.
+ *
+ * `openThreadKey` stays here even though the live case has exactly one thread: it
+ * is where the farmer is standing, it is what a notification tap sets, and the
+ * screen's back button reads it.
  */
 
 export type ChatStatus = 'loading' | 'ready' | 'error';
@@ -50,12 +54,15 @@ type ChatValue = {
   openThread: (dealerId: string) => void;
   closeThread: () => void;
   send: (dealerId: string, text: string) => boolean;
+  /** True when the conversation is the shop's own thread rather than this phone's. */
+  live: boolean;
 };
 
 const ChatContext = createContext<ChatValue | null>(null);
 
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { account } = useSession();
+  const shop = useShopApi();
   const ownerId = useMemo(() => ownerFor(account?.id ?? null), [account?.id]);
   const document = usePersistentDocument<ChatState>({
     collection: 'chat',
@@ -67,18 +74,61 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const { data: state, setData: setState } = document;
   const online = useOnline();
 
-  /*
-   * Where the farmer is standing, not what they have said — so it is React state
-   * rather than part of the document. Reopening the app lands on the chat list,
-   * which is where a moment's thought would expect to be.
-   */
   const [openThreadKey, setOpenThreadKey] = useState<string | null>(null);
 
-  const status: ChatStatus =
-    document.status === 'loading' ? 'loading' : document.status === 'error' ? 'error' : 'ready';
+  /*
+   * The live conversation is the shop's, and there is exactly one of them: the
+   * credential names the pair (farmer, shop). `null` while the credential is being
+   * read is honest — there is no shop to show yet, and inventing an id would list a
+   * conversation with no name.
+   */
+  const live = shop.configured;
+  const liveDealerId = live ? (shop.credential?.shopId ?? null) : null;
 
-  const value = useMemo<ChatValue>(
-    () => ({
+  const value = useMemo<ChatValue>(() => {
+    const openThread = (dealerId: string) => {
+      if (live) {
+        /* Reading the thread is what makes the badge true, and on the live source
+           the badge is counted from the shop's outbox. */
+        shop.markNotificationsRead();
+      } else {
+        setState((current) => openThreadIn(current, dealerId));
+      }
+      setOpenThreadKey(dealerId);
+    };
+
+    if (live) {
+      return {
+        status: shop.status === 'loading' ? 'loading' : 'ready',
+        retry: () => void shop.refresh(),
+        pending: shop.busy ? 1 : 0,
+        online,
+        threadKeys: liveDealerId ? [liveDealerId] : [],
+        messages: (dealerId) => (dealerId === liveDealerId ? (shop.thread?.messages ?? []) : []),
+        unread: (dealerId) => (dealerId === liveDealerId ? shop.unread : 0),
+        unreadTotal: shop.unread,
+        openThreadKey,
+        openThread,
+        closeThread: () => setOpenThreadKey(null),
+        /*
+         * Sent, not queued. The screen clears the box because the shop accepted the
+         * message; a bubble that never reached the shop and still looked sent is the
+         * one failure a chat must not have. The refresh below is what draws it.
+         */
+        send: (_dealerId, text) => {
+          const body = text.trim();
+          if (!body) return false;
+          void shop.send(body);
+          return true;
+        },
+        live: true,
+      };
+    }
+
+    const status: ChatStatus =
+      document.status === 'loading' ? 'loading' : document.status === 'error' ? 'error' : 'ready';
+
+    return {
       status,
       retry: document.reload,
       pending: document.pending,
@@ -88,19 +138,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       unread: (dealerId) => unreadFor(state, dealerId),
       unreadTotal: unreadTotal(state),
       openThreadKey,
-      openThread: (dealerId) => {
-        setState((current) => openThreadIn(current, dealerId));
-        setOpenThreadKey(dealerId);
-      },
+      openThread,
       closeThread: () => setOpenThreadKey(null),
       send: (dealerId, text) => {
         const { state: next, sent } = sendMessage(state, dealerId, text, Date.now());
         if (sent) setState(next);
         return sent;
       },
-    }),
-    [state, status, online, openThreadKey, document.reload, document.pending, setState],
-  );
+      live: false,
+    };
+  }, [
+    document.pending,
+    document.reload,
+    document.status,
+    live,
+    liveDealerId,
+    online,
+    openThreadKey,
+    setState,
+    shop,
+    state,
+  ]);
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
 }
