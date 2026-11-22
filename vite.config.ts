@@ -1,10 +1,64 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { VitePWA } from 'vite-plugin-pwa';
 import { fileURLToPath, URL } from 'node:url';
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
+export default defineConfig(({ mode }) => ({
+  plugins: [
+    react(),
+    tailwindcss(),
+    /*
+     * Installability for phones that will never see a store listing.
+     *
+     * An installed PWA on iOS is the only path to a home-screen app without an
+     * Apple developer account, and on Android it is a first-class install. The
+     * service worker caches the shell so the app opens with no signal, which is
+     * the normal state in a field.
+     *
+     * Skipped in the test run: workbox writes real files and registers real
+     * workers, and a unit suite that does either is testing the bundler.
+     */
+    ...(mode === 'test'
+      ? []
+      : [
+          VitePWA({
+            registerType: 'autoUpdate',
+            includeAssets: ['icons/apple-touch-icon.png', 'icons/mark.svg'],
+            manifest: {
+              name: 'Farmer — apni dukan',
+              short_name: 'Farmer',
+              description:
+                'Mandi rates, weather, crop advice and your shop, in Urdu and English.',
+              lang: 'ur',
+              start_url: '/',
+              scope: '/',
+              display: 'standalone',
+              orientation: 'portrait',
+              background_color: '#FAF9F5',
+              theme_color: '#1F2A17',
+              categories: ['business', 'productivity', 'weather'],
+              icons: [
+                { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+                { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+                {
+                  src: '/icons/icon-maskable-512.png',
+                  sizes: '512x512',
+                  type: 'image/png',
+                  purpose: 'maskable',
+                },
+              ],
+            },
+            workbox: {
+              globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+              navigateFallback: '/index.html',
+              /* MapLibre's worker and the font subset push past the 2 MB default. */
+              maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+              cleanupOutdatedCaches: true,
+            },
+          }),
+        ]),
+  ],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
@@ -102,4 +156,4 @@ export default defineConfig({
       VITE_DEMO_FARMERS: '',
     },
   },
-});
+}));

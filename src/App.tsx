@@ -30,6 +30,8 @@ import { AiScreen } from '@/screens/AiScreen';
 import { DealerDetailScreen } from '@/screens/DealerDetailScreen';
 import { ProductDetailScreen } from '@/screens/ProductDetailScreen';
 import { WeatherScreen } from '@/screens/WeatherScreen';
+import { ShopJoinDialog } from '@/shop/ShopJoinDialog';
+import { useShopJoin } from '@/shop/useShopJoin';
 
 /**
  * The reviewer workspace is the one screen a farmer never opens: it is gated by
@@ -158,6 +160,12 @@ function Shell() {
   const { t } = useLocale();
   const [view, setView] = useState<View>('tabs');
   const [tab, setTab] = useState<TabKey>('home');
+  /*
+   * A scan arrives as a `?join=` parameter on the launch URL, so it is read here
+   * — above the tab bar — and shown over whatever the farmer was doing. Opening
+   * the app from a shop's sticker must not depend on which tab was last used.
+   */
+  const shopJoin = useShopJoin();
   /*
    * Where the place-search screen goes back to. It is opened from the dealer
    * filter and from Profile's own location slot, and it has to return the farmer
@@ -367,6 +375,17 @@ function Shell() {
         ) : null}
         {view === 'tabs' && detail === null && tab === 'community' ? <CommunityScreen /> : null}
       </main>
+
+      {/* Over the tabs, under nothing: a join is a single question and the app
+          stays where it was once it is answered. */}
+      <ShopJoinDialog
+        state={shopJoin.state}
+        onClose={shopJoin.dismiss}
+        onOpenShop={(dealerId) => {
+          setView('tabs');
+          openDealer(dealerId);
+        }}
+      />
 
       {view === 'tabs' && detail === null ? (
         <AppTabBar

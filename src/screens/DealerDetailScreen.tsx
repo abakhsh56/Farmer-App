@@ -19,6 +19,7 @@ import { useLocation } from '@/location/LocationProvider';
 import { useDealer, useDealerProducts } from '@/services/hooks';
 import { useSession } from '@/session/SessionProvider';
 import { useVisits } from '@/visits/VisitProvider';
+import { ShopQrCard } from '@/shop/ShopQrCard';
 
 type Props = {
   dealerId: string;
@@ -188,6 +189,13 @@ export function DealerDetailScreen({ dealerId, onBack, onOpenChat, onOpenProduct
           how to reach it. Each line is omitted when the source did not supply it. */}
       {entry.about || entry.address || entry.phone ? (
         <section className="mt-4 px-4">
+          {/*
+            The shop's own join code. It renders only for the shop that owns the
+            page — the issuing function refuses everyone else and the card stays
+            absent rather than showing an empty box to a farmer browsing.
+          */}
+          <ShopQrCard dealerId={dealerId} />
+
           <SectionLabel>{t('dealer.detail.about')}</SectionLabel>
           {entry.about ? (
             <p className="mt-2 text-body-sm leading-relaxed">{entry.about}</p>

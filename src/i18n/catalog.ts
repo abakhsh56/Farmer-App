@@ -1499,6 +1499,29 @@ export const en = {
   'weather.preparing': 'Preparing voice…',
   'weather.spokenMm': '{value} millimetres',
   'weather.todayTab': 'Today',
+
+  // ── joining a shop by its code ───────────────────────────────────────────
+  'shop.join.title': 'Join this shop',
+  'shop.join.body': 'You scanned a shop code. Join to see what the shop stocks and to message them.',
+  'shop.join.confirm': 'Join',
+  /* The button that asks the server for a shop's join row; the QR is drawn from it. */
+  'shop.join.retry': 'Try the code again',
+  'shop.join.joined': 'You joined {shop}.',
+  'shop.join.already': 'You are already connected to {shop}.',
+  /* Says what to do, not what went wrong: an expired sticker is the shop's to renew. */
+  'shop.join.failed': 'This code is no longer active. Ask the shop to show you a new one.',
+  'shop.join.unavailable': 'Joining needs a connection and a signed-in account. Try again once you are online.',
+  'shop.qr.title': 'Shop code',
+  'shop.qr.body': 'Farmers scan this to join your shop.',
+  'shop.qr.copy': 'Copy code',
+  'shop.qr.copied': 'Code copied',
+  'shop.qr.failed': 'The code image could not be drawn. The code itself still works.',
+  'shop.push.title': 'Shop notifications',
+  'shop.push.body': 'Get a notification when a farmer joins your shop or sends you a message.',
+  'shop.push.enable': 'Turn on notifications',
+  'shop.push.on': 'Notifications are on for this phone.',
+  'shop.push.denied': 'Notifications are blocked for this app. Turn them on in the phone settings.',
+  'shop.push.failed': 'Notifications could not be turned on just now.',
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -2842,6 +2865,27 @@ export const ur: Record<MessageKey, string> = {
   'weather.preparing': 'آواز تیار ہو رہی ہے…',
   'weather.spokenMm': '{value} ملی میٹر',
   'weather.todayTab': 'آج',
+
+  // ── joining a shop by its code ───────────────────────────────────────────
+  'shop.join.title': 'اس دکان میں شامل ہوں',
+  'shop.join.body': 'آپ نے دکان کا کوڈ اسکین کیا۔ شامل ہو کر دیکھیں کہ دکان میں کیا ملتا ہے اور پیغام بھیجیں۔',
+  'shop.join.confirm': 'شامل ہوں',
+  'shop.join.joined': 'آپ {shop} میں شامل ہو گئے۔',
+  'shop.join.retry': 'کوڈ دوبارہ آزمائیں',
+  'shop.join.already': 'آپ {shop} سے پہلے ہی جڑے ہوئے ہیں۔',
+  'shop.join.failed': 'یہ کوڈ اب کام نہیں کرتا۔ دکان سے نیا کوڈ دکھانے کو کہیں۔',
+  'shop.join.unavailable': 'شامل ہونے کے لیے انٹرنیٹ اور سائن اِن اکاؤنٹ ضروری ہے۔ آن لائن ہونے پر دوبارہ کوشش کریں۔',
+  'shop.qr.title': 'دکان کا کوڈ',
+  'shop.qr.body': 'کسان اسے اسکین کر کے آپ کی دکان میں شامل ہوتے ہیں۔',
+  'shop.qr.copy': 'کوڈ کاپی کریں',
+  'shop.qr.copied': 'کوڈ کاپی ہو گیا',
+  'shop.qr.failed': 'کوڈ کی تصویر نہیں بن سکی۔ کوڈ پھر بھی کام کرتا ہے۔',
+  'shop.push.title': 'دکان کی اطلاعیں',
+  'shop.push.body': 'جب کوئی کسان آپ کی دکان میں شامل ہو یا پیغام بھیجے تو اطلاع ملے۔',
+  'shop.push.enable': 'اطلاعات آن کریں',
+  'shop.push.on': 'اس فون پر اطلاعات آن ہیں۔',
+  'shop.push.denied': 'اس ایپ کے لیے اطلاعات بند ہیں۔ فون کی سیٹنگز سے آن کریں۔',
+  'shop.push.failed': 'ابھی اطلاعات آن نہیں ہو سکیں۔',
 };
 
 /**
