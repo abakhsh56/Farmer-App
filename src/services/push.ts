@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core';
+import { farmerRegisterDevice } from '@/shop/api/client';
 import { serviceConfig } from './config';
 import { getSupabaseClient } from './supabaseClient';
 
@@ -40,6 +41,114 @@ export function pushSupported(): boolean {
  * The token is stored through `register_push_token`, which is idempotent on the
  * token itself — launching the app again must not double every notification.
  */
+/**
+ * The notification channel, created before the first push arrives.
+ *
+ * Android 8 and later drop a notification whose channel does not exist, silently,
+ * which is indistinguishable from a push that never arrived. The id is `agrishop`
+ * because the shop app uses the same one: one channel in the phone's settings, so a
+ * shop owner and a farmer are explaining the same switch when they compare phones.
+ */
+export const SHOP_CHANNEL_ID = 'agrishop';
+
+export async function ensureShopChannel(): Promise<void> {
+  if (Capacitor.getPlatform() !== 'android') return;
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+    await PushNotifications.createChannel({
+      id: SHOP_CHANNEL_ID,
+      name: 'AgriShop',
+      description: 'Messages, offers and visits from your shop',
+      importance: 4,
+      visibility: 1,
+      vibration: true,
+    });
+  } catch {
+    // A channel that already exists is not an error; nor is a shell without the
+    // plugin, which is what a browser tab is.
+  }
+}
+
+/**
+ * This phone's FCM token, or null when the platform will not give one.
+ *
+ * Resolves on whichever comes first: a registration, a registration error, or ten
+ * seconds. The platform answers in milliseconds; a refusal must not hang a launch.
+ */
+async function deviceToken(
+  PushNotifications: typeof import('@capacitor/push-notifications').PushNotifications,
+): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
+    const settle = (value: string | null) => resolve(value);
+
+    void PushNotifications.addListener('registration', (value) => settle(value.value));
+    void PushNotifications.addListener('registrationError', () => settle(null));
+    void PushNotifications.register();
+
+    setTimeout(() => settle(null), 10_000);
+  });
+}
+
+/**
+ * Registers this phone with the shop backend, which is what lets the shop reach it.
+ *
+ * Deliberately silent about permission: it runs on launch, every launch, and a
+ * permission prompt with no explanation on screen is the fastest way to be denied
+ * forever. A phone that has not granted it is simply not registered yet.
+ */
+export async function registerShopDevice(shopToken: string): Promise<boolean> {
+  if (!Capacitor.isNativePlatform()) return false;
+  if (!shopToken) return false;
+
+  const platform = Capacitor.getPlatform();
+  if (platform !== 'android' && platform !== 'ios') return false;
+
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+    const permission = await PushNotifications.checkPermissions();
+    if (permission.receive !== 'granted') return false;
+
+    await ensureShopChannel();
+
+    const token = await deviceToken(PushNotifications);
+    if (!token) return false;
+
+    const result = await farmerRegisterDevice(shopToken, token, platform);
+    return result.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A tap on a notification, as the route it asked for.
+ *
+ * `data.route` is the shop's own instruction — `/` for a farmer, meaning "open the
+ * conversation". It is read as a signal rather than a URL to navigate to, because a
+ * route this app does not recognise is a shop-side deployment detail and must not
+ * send a farmer to a screen that does not exist.
+ */
+export async function onPushTap(handler: (route: string | null) => void): Promise<() => void> {
+  try {
+    const { PushNotifications } = await import('@capacitor/push-notifications');
+    await ensureShopChannel();
+
+    const listener = await PushNotifications.addListener(
+      'pushNotificationActionPerformed',
+      (action) => {
+        const data = (action.notification?.data ?? {}) as Record<string, unknown>;
+        handler(typeof data.route === 'string' ? data.route : null);
+      },
+    );
+
+    return () => {
+      void listener.remove();
+    };
+  } catch {
+    return () => undefined;
+  }
+}
+
 export async function requestShopOwnerPush(): Promise<PushRegistration> {
   if (!Capacitor.isNativePlatform()) return { status: 'unsupported' };
   if (!serviceConfig.supabase.configured) return { status: 'unavailable' };
@@ -59,19 +168,9 @@ export async function requestShopOwnerPush(): Promise<PushRegistration> {
 
     if (permission !== 'granted') return { status: 'denied' };
 
-    const token = await new Promise<string | null>((resolve) => {
-      const settle = (value: string | null) => {
-        resolve(value);
-      };
+    await ensureShopChannel();
 
-      void PushNotifications.addListener('registration', (value) => settle(value.value));
-      void PushNotifications.addListener('registrationError', () => settle(null));
-
-      void PushNotifications.register();
-
-      /* The platform answers in milliseconds; a refusal must not hang the caller. */
-      setTimeout(() => settle(null), 10_000);
-    });
+    const token = await deviceToken(PushNotifications);
 
     if (!token) return { status: 'unavailable' };
 

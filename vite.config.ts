@@ -137,6 +137,11 @@ export default defineConfig(({ mode }) => ({
       // fixture the suites assert on.
       VITE_MARKETPLACE_URL: '',
       VITE_MARKETPLACE_KEY: '',
+      // The shop app's backend. Pinned empty so no suite ever reaches a real
+      // shop, and so the on-device conversation the chat suites assert on is the
+      // one they get.
+      VITE_SHOP_API_URL: '',
+      VITE_SHOP_API_KEY: '',
       VITE_AI_ENDPOINT: '',
       VITE_OTP_ENDPOINT: '',
       VITE_WEATHER_INGEST_ENDPOINT: '',

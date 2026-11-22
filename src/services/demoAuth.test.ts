@@ -35,7 +35,8 @@ const CONFIG: DemoAuthConfig = parseDemoIdentities(RAW) as DemoAuthConfig;
 
 const BACKEND: ServiceConfig = {
   supabase: { url: 'https://project.supabase.co', anonKey: 'anon', configured: true },
-  marketplace: { url: null, key: null, configured: false },
+      marketplace: { url: null, key: null, configured: false },
+    shopApi: { url: null, key: null, configured: false },
   aiEndpoint: { url: null, configured: false },
   otpEndpoint: { url: null, configured: false },
   dealerEndpoint: { url: null, configured: false },
