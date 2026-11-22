@@ -1,5 +1,5 @@
 import { ChevronLeft, MessageCircle, Search, TriangleAlert, X } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { SectionLabel } from '@/components/SectionLabel';
 import { EmptyState, LoadingState } from '@/components/States';
 import { dealerNameKey } from '@/data/dealers';
@@ -92,11 +92,7 @@ export function SearchScreen({
    * neither is given the point already in play. A search must not be the one
    * screen that decides the farmer's area differently.
    */
-  const origin =
-    location.searchOrigin ??
-    (location.hasSaved
-      ? undefined
-      : { lat: location.activePoint.lat, lon: location.activePoint.lon });
+  const origin = location.dealerOrigin ?? location.activePoint;
 
   const dealers = useDealerSearch({ radiusKm: location.radiusKm, origin, query: keyword });
   const products = useProductSearch({ radiusKm: location.radiusKm, origin, query: keyword });
@@ -117,7 +113,17 @@ export function SearchScreen({
   };
 
   const dealerRows = dealers.data;
-  const productRows = products.data;
+  /* One line per product. Several shops listing the same seed is one search
+     result, and the row already names the nearest shop that has it. */
+  const productRows = useMemo(() => {
+    const seen = new Set<string>();
+    return products.data.filter((hit) => {
+      const key = hit.product.canonicalProductId ?? hit.product.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [products.data]);
 
   return (
     <div className="flex flex-col px-4 pt-4 pb-6">

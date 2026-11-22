@@ -33,7 +33,7 @@ import {
  *
  * Speaking never refuses for want of a matching voice, and takes the best voice
  * available in this order: the device's own voice for the language, then the
- * Urdu voice the app carries (Piper, on-device — `services/piper.ts`).
+ * Urdu voice the app carries (Gemini TTS through our endpoint — `services/cloudVoice.ts`).
  *
  * There is deliberately no third step, and that is a fix rather than an
  * omission. The platform's default used to be the last resort so that a pressed
@@ -51,6 +51,14 @@ export type SpeechValue = {
   supported: boolean;
   /** The id passed to `speak` for whatever is being read, or null. */
   speaking: string | null;
+  /**
+   * The id whose voice is being prepared, or null.
+   *
+   * On a device with no Urdu voice the model has to arrive before a word can be
+   * made, and that is not instant. Saying so is the difference between a control
+   * that is thinking and one that is broken.
+   */
+  preparing: string | null;
   /** Returns false only when the platform has no speech at all. */
   speak: (input: { id: string; text: string; lang: string }) => boolean;
   /**
@@ -74,6 +82,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
     supported ? window.speechSynthesis.getVoices() : [],
   );
   const [speaking, setSpeaking] = useState<string | null>(null);
+  const [preparing, setPreparing] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supported) return;
@@ -92,6 +101,7 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
 
   const stop = useCallback(() => {
     setSpeaking(null);
+    setPreparing(null);
     stopSpeaking();
   }, []);
 
@@ -126,14 +136,21 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
        * advice, because the farmer cannot hear that it is wrong.
        */
       setSpeaking(id);
-      void speakWithAppVoice(text, onEnd)
+      setPreparing(id);
+      void speakWithAppVoice(text, onEnd, () =>
+        setPreparing((current) => (current === id ? null : current)),
+      )
         .then((spokenByApp) => {
-          if (!spokenByApp) setSpeaking((current) => (current === id ? null : current));
+          if (!spokenByApp) {
+            setPreparing((current) => (current === id ? null : current));
+            setSpeaking((current) => (current === id ? null : current));
+          }
         })
         .catch((failure: unknown) => {
           /* The voice is missing and nothing was read. The next press tries
-             again — `services/piper.ts` drops the failed load on purpose. */
+             again — `services/cloudVoice.ts` does not remember a failed part. */
           console.warn('[speech] the app voice could not be used:', failure);
+          setPreparing((current) => (current === id ? null : current));
           setSpeaking((current) => (current === id ? null : current));
         });
       return true;
@@ -142,8 +159,8 @@ export function SpeechProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<SpeechValue>(
-    () => ({ supported, speaking, speak, warm, stop }),
-    [supported, speaking, speak, warm, stop],
+    () => ({ supported, speaking, preparing, speak, warm, stop }),
+    [supported, speaking, preparing, speak, warm, stop],
   );
 
   return <SpeechContext.Provider value={value}>{children}</SpeechContext.Provider>;

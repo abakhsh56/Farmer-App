@@ -28,8 +28,56 @@ import { homedir } from 'node:os';
 
 const ROOT = resolve(process.cwd());
 const ANDROID_DIR = join(ROOT, 'android');
-const APK_SOURCE = join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
-const APK_TARGET = join(ROOT, 'artifacts', 'farmer-app-debug.apk');
+/**
+ * The three installs. Each flavor in `android/app/build.gradle` has its own
+ * application id, so they coexist on one phone.
+ *
+ * `dev` is the default because it is the one tested first. The web bundle is
+ * built for the chosen environment below — the flavor only carries the identity —
+ * so the environment has to be picked before `vite build`, not at Gradle time.
+ */
+const FLAVORS = {
+  dev: {
+    task: 'assembleDevDebug',
+    output: join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'dev', 'debug', 'app-dev-debug.apk'),
+    target: join(ROOT, 'artifacts', 'farmer-app-dev.apk'),
+    ota: 'ota-dev',
+  },
+  staging: {
+    task: 'assembleStagingDebug',
+    output: join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'staging', 'debug', 'app-staging-debug.apk'),
+    target: join(ROOT, 'artifacts', 'farmer-app-staging.apk'),
+    ota: 'ota-staging',
+  },
+  production: {
+    task: 'assembleProductionDebug',
+    output: join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'production', 'debug', 'app-production-debug.apk'),
+    target: join(ROOT, 'artifacts', 'farmer-app-production.apk'),
+    ota: 'ota-production',
+  },
+};
+
+const OTA_RELEASES = 'https://github.com/abakhsh56/Farmer-App/releases/download';
+
+function parseArgs(argv) {
+  const flags = argv.slice(2);
+  let flavor = 'dev';
+  let clean = false;
+  for (let i = 0; i < flags.length; i += 1) {
+    if (flags[i] === '--flavor') flavor = flags[i + 1];
+    else if (flags[i].startsWith('--flavor=')) flavor = flags[i].slice('--flavor='.length);
+    else if (flags[i] === '--clean') clean = true;
+  }
+  if (!FLAVORS[flavor]) {
+    fail(`unknown flavor "${flavor}".`, `  Choose one of: ${Object.keys(FLAVORS).join(', ')}`);
+  }
+  return { flavor, clean };
+}
+
+const { flavor, clean } = parseArgs(process.argv);
+const selection = FLAVORS[flavor];
+const APK_SOURCE = selection.output;
+const APK_TARGET = selection.target;
 
 /** Gradle 8.14 supports up to Java 23. Java 24+ fails on the build script itself. */
 const MIN_MAJOR = 17;
@@ -166,20 +214,79 @@ if (!existsSync(wrapper)) {
   fail(`${wrapper} is missing — the android/ platform is incomplete.`);
 }
 
-console.log('build-apk: running Gradle assembleDebug (first run downloads dependencies)…\n');
+const isWindowsShell = process.platform === 'win32';
+
+/**
+ * The web bundle is flavour-specific (environment + update channel are baked in),
+ * so it is rebuilt and synced for every APK rather than copied once into all
+ * three. This is the only way three installs on one phone can each follow their
+ * own channel.
+ */
+function runWebBuild() {
+  // A plain command line through the shell: on Windows `shell: true` resolves
+  // npm/npx through PATHEXT, which a quoted `npm.cmd` does not (Node then tries to
+  // load the .cmd file as JavaScript and reports MODULE_NOT_FOUND).
+  const buildEnv = { ...env, VITE_APP_ENV: flavor, VITE_OTA_BASE: `${OTA_RELEASES}/${selection.ota}` };
+
+  // Run the tools through `node` and their own entry scripts, not through npm:
+  // this project has an `npm` package in node_modules, so a shell resolves `npm`
+  // to that shim and dies with "Cannot find module …/node_modules/npm/bin".
+  const node = process.execPath;
+  const tsc = spawnSync(node, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit'], {
+    cwd: ROOT,
+    env: buildEnv,
+    stdio: 'inherit',
+  });
+  if (tsc.status !== 0) fail(`typecheck failed (exit ${tsc.status}).`);
+
+  const vite = spawnSync(node, [join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), 'build'], {
+    cwd: ROOT,
+    env: buildEnv,
+    stdio: 'inherit',
+  });
+  if (vite.status !== 0) fail(`the web build failed (exit ${vite.status}).`);
+
+  const capacitor = spawnSync(node, [join(ROOT, 'node_modules', '@capacitor', 'cli', 'bin', 'capacitor'), 'sync', 'android'], {
+    cwd: ROOT,
+    env: buildEnv,
+    stdio: 'inherit',
+  });
+  if (capacitor.status !== 0) fail(`cap sync failed (exit ${capacitor.status}).`);
+}
+
+runWebBuild();
+
+/**
+ * `--clean` throws away Gradle's intermediates first.
+ *
+ * Needed whenever what is IN the bundle changes rather than its contents: removing
+ * the 79 MB voice model left every new APK still carrying it, because the merged
+ * asset directory is incremental and the old folder survived. `cap sync` had
+ * already written the correct 2 MB, so the stale bytes were invisible until the
+ * APK was measured.
+ */
+if (clean) {
+  console.log('build-apk: gradlew clean…');
+  const cleaned = isWindowsShell
+    ? spawnSync(`"${join(ANDROID_DIR, 'gradlew.bat')}" clean`, { cwd: ANDROID_DIR, env, stdio: 'inherit', shell: true })
+    : spawnSync(join(ANDROID_DIR, 'gradlew'), ['clean'], { cwd: ANDROID_DIR, env, stdio: 'inherit' });
+  if (cleaned.status !== 0) fail(`gradlew clean failed (exit ${cleaned.status}).`);
+}
+
+console.log(`build-apk: running Gradle ${selection.task} (first run downloads dependencies)…\n`);
 
 // Passed as a single quoted command string with shell:true on Windows. That
 // produces the ""C:\...\gradlew.bat" assembleDebug" form that cmd.exe parses
 // correctly; passing the path as a separate argv entry gets double-escaped by
 // Node and cmd then reports the whole thing as an unrecognised command.
 const build = isWindows
-  ? spawnSync(`"${wrapper}" assembleDebug`, {
+  ? spawnSync(`"${wrapper}" ${selection.task}`, {
       cwd: ANDROID_DIR,
       env,
       stdio: 'inherit',
       shell: true,
     })
-  : spawnSync(wrapper, ['assembleDebug'], { cwd: ANDROID_DIR, env, stdio: 'inherit' });
+  : spawnSync(wrapper, [selection.task], { cwd: ANDROID_DIR, env, stdio: 'inherit' });
 
 if (build.status !== 0) {
   fail(`Gradle exited with status ${build.status}.`);
@@ -195,4 +302,4 @@ copyFileSync(APK_SOURCE, APK_TARGET);
 const bytes = statSync(APK_TARGET).size;
 console.log(`\nbuild-apk: APK written to ${APK_TARGET}`);
 console.log(`build-apk: size ${(bytes / 1024 / 1024).toFixed(1)} MB`);
-console.log('build-apk: install with  adb install -r artifacts/farmer-app-debug.apk');
+console.log(`build-apk: install with  adb install -r artifacts/farmer-app-${flavor}.apk`);

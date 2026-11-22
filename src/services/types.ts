@@ -74,6 +74,15 @@ export type WeatherDay = {
   maxC: number | null;
   precipMm: number | null;
   conditionText: string | null;
+  /** Daily condition key, when the provider's code has an app wording. */
+  conditionKey?: MessageKey;
+  /** Daily high/low apparent temperature. Optional: not every provider has it. */
+  feelsMaxC?: number | null;
+  feelsMinC?: number | null;
+  /** Chance of precipitation at some point in the day, as a percentage. */
+  precipChancePct?: number | null;
+  /** Strongest wind expected during the day. */
+  windMaxKph?: number | null;
 };
 
 export interface WeatherProvider {
@@ -183,11 +192,35 @@ export type AiContext = {
   signalSubjects?: string[];
 };
 
+export type AiKnowledgeTier = 'verified' | 'supplementary' | 'community';
+
 export type AiCitation = {
   kind: 'knowledge' | 'weather' | 'market' | 'crop_fact' | 'scan';
   label: string;
   /** Version of the knowledge entry, when the citation is knowledge. */
   version?: number;
+  /** Stable published-entry identity; never a database id. */
+  slug?: string;
+  /** Publisher or provenance line supplied by the server. */
+  source?: string;
+  sourceUrl?: string;
+  evidenceTier?: AiKnowledgeTier;
+  publishedOn?: string;
+  updatedOn?: string;
+  accessedOn?: string;
+};
+
+export type AiContextCategory = 'crops' | 'location' | 'interests';
+
+export type AiAnswerMetadata = {
+  /** The scoring rules the server used; absent when no context was read. */
+  scoring_version: number | null;
+  /** True when the server read this farmer's own context for the answer. */
+  farmer_context_available: boolean;
+  /** Only the categories actually supplied to the model. */
+  context_categories: AiContextCategory[];
+  /** Published knowledge slugs behind the answer, never database ids. */
+  knowledge_sources: string[];
 };
 
 export type AiAnswer = {
@@ -206,6 +239,18 @@ export type AiAnswer = {
   escalate: boolean;
   /** Anything the answer could not rely on, stated rather than hidden. */
   caveats: string[];
+  /**
+   * `retrieval` means the text is a direct published excerpt, not model prose.
+   * Optional so an older gateway remains a valid response.
+   */
+  generation?: 'model' | 'retrieval';
+  /** Opaque id for feedback and retry deduplication; never a farmer id. */
+  requestId?: string;
+  /**
+   * Internal provenance. Optional so an older gateway remains a valid response;
+   * the screens do not render this object.
+   */
+  metadata?: AiAnswerMetadata;
 };
 
 export type AiScanResult = {
@@ -223,6 +268,8 @@ export type AiScanResult = {
   };
   citations: AiCitation[];
   escalate: boolean;
+  /** Opaque id for feedback and retry deduplication; never a farmer id. */
+  requestId?: string;
 };
 
 export interface AiProvider {
@@ -371,6 +418,21 @@ export type DealerSummary = {
   syncState: 'fresh' | 'stale' | 'unreachable';
   syncedAt: number | null;
   tags: readonly string[];
+  /**
+   * The store's own description, in the source's words.
+   *
+   * Not a message key, for the same reason `name` is not: this is prose the
+   * dealer wrote about their own shop, not the app's wording. A provider that
+   * does not supply it leaves it absent and the profile simply omits the section,
+   * rather than the app inventing a description for a real business.
+   */
+  about?: string | null;
+  /** Human-readable address as the dealer system holds it. */
+  address?: string | null;
+  /** Contact number the shop publishes for farmers. */
+  phone?: string | null;
+  /** Year the shop started trading, when the source reports it. */
+  establishedYear?: number | null;
 };
 
 export type DealerProduct = {
@@ -491,7 +553,12 @@ export type Collection =
   | 'community'
   | 'chat'
   | 'crops'
-  | 'media';
+  | 'media'
+  /* The assistant's daily allowance. Its own document rather than a field on
+     another one, because it is the one record that must survive every other
+     store being cleared: a farmer who deletes their chat history must not be
+     handed a fresh 100 credits by doing so. */
+  | 'ai';
 
 export interface Repository {
   readonly name: string;

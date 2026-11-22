@@ -61,11 +61,13 @@ export function HomeScreen({
   onOpenProfile,
   onOpenLocationSearch,
   onOpenCommunity,
+  onOpenWeather,
 }: {
   onScan: () => void;
   onOpenProfile: () => void;
   onOpenLocationSearch: () => void;
   onOpenCommunity: () => void;
+  onOpenWeather: () => void;
 }) {
   const { t, locale, tIn } = useLocale();
   const credit = useCredit();
@@ -117,6 +119,7 @@ export function HomeScreen({
   const speech = useSpeech();
   const speechTag = LOCALE_REGISTRY.ur.tag;
   const listening = speech.speaking === 'weather';
+  const preparingVoice = speech.preparing === 'weather';
   const spokenAdvice =
     reading && weatherUsable
       ? [
@@ -148,6 +151,18 @@ export function HomeScreen({
    */
   const stopSpeech = speech.stop;
   useEffect(() => () => stopSpeech(), [stopSpeech]);
+
+  /*
+   * The voice is prepared while the card is being read, not when the pill is
+   * pressed. The advice is on screen from the moment the weather arrives, so the
+   * model can arrive and the first sentence can be made in that time — which is
+   * what turns a press into a sound instead of a wait. Warming is idempotent:
+   * the model is fetched once per session and each sentence is kept once.
+   */
+  const warmVoice = speech.warm;
+  useEffect(() => {
+    if (spokenAdvice) warmVoice(speechTag, spokenAdvice);
+  }, [warmVoice, speechTag, spokenAdvice]);
 
   /*
    * What is happening around the farmer's crop, built from the two places this
@@ -383,11 +398,21 @@ export function HomeScreen({
                   ? speech.stop()
                   : speech.speak({ id: 'weather', text: spokenAdvice, lang: speechTag })
               }
-              aria-label={listening ? t('weather.stopListening') : t('weather.listen')}
+              aria-label={
+                preparingVoice
+                  ? t('weather.preparing')
+                  : listening
+                    ? t('weather.stopListening')
+                    : t('weather.listen')
+              }
               className="flex items-center gap-1.5 rounded-full bg-white/12 px-3 py-1.5 text-label text-white"
             >
               <Volume2 className="size-4" aria-hidden />
-              {listening ? t('weather.stopListening') : t('weather.listen')}
+              {preparingVoice
+                ? t('weather.preparing')
+                : listening
+                  ? t('weather.stopListening')
+                  : t('weather.listen')}
             </button>
           ) : null}
         </div>
@@ -397,14 +422,24 @@ export function HomeScreen({
         ) : null}
 
         {reading !== null && reading.data.tempC !== null ? (
-          <div className="mt-3 flex items-center gap-3">
+          /*
+            The card's number is the door to the sky. It used to be a plain block,
+            which left the fuller weather screen with no way in from the only
+            surface that carries weather. Listen and Refresh sit outside this
+            control, so each press still does exactly one thing.
+          */
+          <button
+            type="button"
+            onClick={onOpenWeather}
+            className="mt-3 flex w-full items-center gap-3 text-start motion-safe:transition-transform motion-safe:active:scale-95"
+          >
             <Cloud className="size-9 shrink-0 text-white" aria-hidden />
             {/* lining-nums matters: Cormorant defaults to old-style figures, and a
                 temperature set in text figures reads as a broken number. */}
-            <p className="font-serif text-display lining-nums tabular-nums">
+            <span className="font-serif text-display lining-nums tabular-nums">
               {Math.round(reading.data.tempC)}°
-            </p>
-            <p className="text-label leading-relaxed text-white/70">
+            </span>
+            <span className="block text-label leading-relaxed text-white/70">
               {reading.data.conditionKey
                 ? t(reading.data.conditionKey)
                 : (reading.data.conditionText ?? '')}
@@ -415,8 +450,13 @@ export function HomeScreen({
               {reading.data.windKph !== null
                 ? t('weather.windValue', { speed: Math.round(reading.data.windKph) })
                 : ''}
-            </p>
-          </div>
+            </span>
+            <ChevronRight
+              className="ms-auto size-4 shrink-0 self-start text-white/60 rtl:rotate-180"
+              aria-hidden
+            />
+            <span className="sr-only">{t('weather.open')}</span>
+          </button>
         ) : null}
 
         {weatherUsable ? (
@@ -513,7 +553,7 @@ export function HomeScreen({
         one question asked two ways. The block this replaced was a second, louder
         answer to the same question, with the same destination.
       */}
-      <CropCard onScan={onScan} />
+      <CropCard onScan={onScan} onOpenWeather={onOpenWeather} />
 
       {/*
         The credit card is account data, so before there is an account it is not

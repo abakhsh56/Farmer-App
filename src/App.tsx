@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { AppTabBar, type TabKey } from '@/components/AppTabBar';
 import { Toaster } from '@/components/ui/sonner';
 import { ChatProvider, useChat } from '@/chat/ChatProvider';
 import { CommunityProvider } from '@/community/CommunityProvider';
+import { AiCreditsProvider } from '@/aiagent/AiCreditsProvider';
 import { CreditProvider } from '@/credit/CreditProvider';
-import { LocaleProvider } from '@/i18n/LocaleProvider';
+import { LocaleProvider, useLocale } from '@/i18n/LocaleProvider';
 import { InsightProvider } from '@/insights/InsightProvider';
 import { LocationProvider } from '@/location/LocationProvider';
 import {
@@ -20,10 +21,27 @@ import { ChatScreen } from '@/screens/ChatScreen';
 import { CommunityScreen } from '@/screens/CommunityScreen';
 import { DealersScreen } from '@/screens/DealersScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
+import { AlertSettingsScreen } from '@/screens/AlertSettingsScreen';
+import { InterestsScreen } from '@/screens/InterestsScreen';
 import { LocationSearchScreen } from '@/screens/LocationSearchScreen';
 import { SearchScreen } from '@/screens/SearchScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
-import { ScanScreen } from '@/screens/ScanScreen';
+import { AiScreen } from '@/screens/AiScreen';
+import { DealerDetailScreen } from '@/screens/DealerDetailScreen';
+import { ProductDetailScreen } from '@/screens/ProductDetailScreen';
+import { WeatherScreen } from '@/screens/WeatherScreen';
+import { ShopJoinDialog } from '@/shop/ShopJoinDialog';
+import { useShopJoin } from '@/shop/useShopJoin';
+
+/**
+ * The reviewer workspace is the one screen a farmer never opens: it is gated by
+ * a server-derived authority and reached from Profile by reviewers alone. Its
+ * editor, dialogs and review forms are ~60 kB, so loading it on demand keeps
+ * that work out of the first paint every farmer pays for.
+ */
+const ReviewScreen = lazy(() =>
+  import('@/screens/ReviewScreen').then((module) => ({ default: module.ReviewScreen })),
+);
 
 /**
  * Two levels of navigation: the tab bar, and one pushed screen on top of it.
@@ -33,7 +51,31 @@ import { ScanScreen } from '@/screens/ScanScreen';
  * from the home header and pushes over the tabs, which is also why the bar is
  * hidden while it is open.
  */
-type View = 'tabs' | 'profile' | 'locationSearch' | 'search';
+type View =
+  | 'tabs'
+  | 'profile'
+  | 'interests'
+  | 'alerts'
+  | 'review'
+  | 'locationSearch'
+  | 'search'
+  | 'weather';
+
+/**
+ * The two detail pages.
+ *
+ * They are pushed rather than shown in a sheet: a shop and a product both carry
+ * more than a sheet can hold, and each links to the other. Which is exactly why
+ * they are a stack — a shop's page lists products, a product's page lists shops,
+ * and following that trail has to be walkable in both directions. Two "where did
+ * I come from" variables could not do it: opening a shop from a product made the
+ * shop's "back" point at the product, and the product's "back" point at the shop,
+ * so Back bounced between the two pages forever instead of reaching the list.
+ * A stack records the trail itself, so Back always unwinds one real step.
+ */
+type Detail =
+  | { kind: 'dealer'; dealerId: string }
+  | { kind: 'product'; canonicalProductId: string; dealerId: string | null };
 
 /**
  * The whole app.
@@ -94,7 +136,9 @@ export function App({ services }: { services?: Services } = {}) {
                         then have to import the other one's.
                       */}
                       <SpeechProvider>
-                        <Shell />
+                        <AiCreditsProvider>
+                          <Shell />
+                        </AiCreditsProvider>
                       </SpeechProvider>
                     </ChatProvider>
                     <Toaster position="top-center" />
@@ -113,8 +157,15 @@ export function App({ services }: { services?: Services } = {}) {
 /** The screens and the tab bar — the part that needs the stores above it. */
 function Shell() {
   const chat = useChat();
+  const { t } = useLocale();
   const [view, setView] = useState<View>('tabs');
   const [tab, setTab] = useState<TabKey>('home');
+  /*
+   * A scan arrives as a `?join=` parameter on the launch URL, so it is read here
+   * — above the tab bar — and shown over whatever the farmer was doing. Opening
+   * the app from a shop's sticker must not depend on which tab was last used.
+   */
+  const shopJoin = useShopJoin();
   /*
    * Where the place-search screen goes back to. It is opened from the dealer
    * filter and from Profile's own location slot, and it has to return the farmer
@@ -122,6 +173,20 @@ function Shell() {
    * from Profile would lose their place.
    */
   const [locationReturn, setLocationReturn] = useState<View>('tabs');
+  /*
+   * Which half of the Shop tab is showing. It lives here so it survives a trip
+   * into a dealer or a product page — those are pushed screens, and the list under
+   * them is unmounted while they are open.
+   */
+  const [shopSection, setShopSection] = useState<'products' | 'dealers'>('dealers');
+  /*
+   * The detail trail: the shop or product currently open, and everything it was
+   * reached through. Back pops one entry, so shop → product → shop → Back lands
+   * on the product that was actually visited, and the next Back keeps unwinding
+   * towards the list — never back into the page it just left.
+   */
+  const [details, setDetails] = useState<Detail[]>([]);
+  const detail: Detail | null = details.length > 0 ? (details[details.length - 1] ?? null) : null;
 
   /*
    * First run, before anything else. It sits here rather than in `App` because
@@ -141,8 +206,29 @@ function Shell() {
    */
   const openThread = (dealerId: string) => {
     chat.openThread(dealerId);
+    /*
+     * A conversation opened from a shop or a product leaves the detail trail: the
+     * thread lives on the Chat tab, and setting the tab while a detail page was
+     * still the visible screen changed nothing the farmer could see.
+     */
+    setDetails([]);
+    setView('tabs');
     setTab('chat');
   };
+
+  /** A shop's own page, pushed onto wherever the farmer already was. */
+  const openDealer = (dealerId: string) => {
+    setDetails((stack) => [...stack, { kind: 'dealer', dealerId }]);
+  };
+
+  /** One product's page, pushed the same way — which is what makes the two
+      pages link in both directions without one of them owning the other. */
+  const openProduct = (target: { canonicalProductId: string; dealerId: string | null }) => {
+    setDetails((stack) => [...stack, { kind: 'product', ...target }]);
+  };
+
+  /** One step back along the trail; the list itself when it runs out. */
+  const closeDetail = () => setDetails((stack) => stack.slice(0, -1));
 
   /*
    * First run, or the app. Not both.
@@ -166,11 +252,43 @@ function Shell() {
               setView('tabs');
               setTab('dealers');
             }}
+            onOpenInterests={() => setView('interests')}
+            onOpenAlerts={() => setView('alerts')}
+            onOpenReview={() => setView('review')}
             onOpenLocationSearch={() => {
               setLocationReturn('profile');
               setView('locationSearch');
             }}
           />
+        ) : null}
+
+        {/* Advice preferences, pushed from Profile so the tab bar stays out of
+            the way and Back returns to the settings list the farmer left. */}
+        {view === 'interests' ? (
+          <InterestsScreen onBack={() => setView('profile')} />
+        ) : null}
+
+        {/* Alert preferences are account settings, pushed from Profile. */}
+        {view === 'alerts' ? (
+          <AlertSettingsScreen onBack={() => setView('profile')} />
+        ) : null}
+
+        {/* The reviewer workspace is pushed from Profile and is gated by the
+            server-derived named authority, not by the presence of this route. */}
+        {view === 'review' ? (
+          <Suspense
+            fallback={
+              <div
+                role="status"
+                aria-live="polite"
+                className="px-8 py-14 text-center text-body-sm text-muted-foreground"
+              >
+                {t('review.loading')}
+              </div>
+            }
+          >
+            <ReviewScreen onBack={() => setView('profile')} />
+          </Suspense>
         ) : null}
 
         {/*
@@ -197,10 +315,37 @@ function Shell() {
           />
         ) : null}
 
-        {view === 'tabs' && tab === 'home' ? (
+        {/* The Home weather card at full size. A pushed screen, like Profile, so
+            the tab bar is out of the way while the sky has the room. */}
+        {view === 'weather' ? <WeatherScreen onBack={() => setView('tabs')} /> : null}
+
+        {/* Whatever is on top of the detail trail: a shop in full, or one
+            product with its catalogue entry above and the shops that list it
+            below. Both read the services rather than a list held in a screen. */}
+        {detail !== null ? (
+          detail.kind === 'dealer' ? (
+            <DealerDetailScreen
+              dealerId={detail.dealerId}
+              onBack={closeDetail}
+              onOpenChat={openThread}
+              onOpenProduct={openProduct}
+            />
+          ) : (
+            <ProductDetailScreen
+              canonicalProductId={detail.canonicalProductId}
+              dealerId={detail.dealerId}
+              onBack={closeDetail}
+              onOpenDealer={openDealer}
+              onOpenChat={openThread}
+            />
+          )
+        ) : null}
+
+        {view === 'tabs' && detail === null && tab === 'home' ? (
           <HomeScreen
             onScan={() => setTab('scan')}
             onOpenProfile={() => setView('profile')}
+            onOpenWeather={() => setView('weather')}
             onOpenLocationSearch={() => {
               setLocationReturn('tabs');
               setView('locationSearch');
@@ -208,26 +353,41 @@ function Shell() {
             onOpenCommunity={() => setTab('community')}
           />
         ) : null}
-        {view === 'tabs' && tab === 'dealers' ? (
+        {view === 'tabs' && detail === null && tab === 'dealers' ? (
           <DealersScreen
+            section={shopSection}
+            onSectionChange={setShopSection}
             onOpenChat={openThread}
             onOpenSearch={() => setView('search')}
+            onOpenDealer={openDealer}
+            onOpenProduct={openProduct}
             onOpenLocationSearch={() => {
               setLocationReturn('tabs');
               setView('locationSearch');
             }}
           />
         ) : null}
-        {view === 'tabs' && tab === 'scan' ? (
-          <ScanScreen onOpenDealers={() => setTab('dealers')} />
+        {view === 'tabs' && detail === null && tab === 'scan' ? (
+          <AiScreen onOpenDealers={() => setTab('dealers')} />
         ) : null}
-        {view === 'tabs' && tab === 'chat' ? (
+        {view === 'tabs' && detail === null && tab === 'chat' ? (
           <ChatScreen onBrowseDealers={() => setTab('dealers')} />
         ) : null}
-        {view === 'tabs' && tab === 'community' ? <CommunityScreen /> : null}
+        {view === 'tabs' && detail === null && tab === 'community' ? <CommunityScreen /> : null}
       </main>
 
-      {view === 'tabs' ? (
+      {/* Over the tabs, under nothing: a join is a single question and the app
+          stays where it was once it is answered. */}
+      <ShopJoinDialog
+        state={shopJoin.state}
+        onClose={shopJoin.dismiss}
+        onOpenShop={(dealerId) => {
+          setView('tabs');
+          openDealer(dealerId);
+        }}
+      />
+
+      {view === 'tabs' && detail === null ? (
         <AppTabBar
           value={tab}
           onChange={(next) => {

@@ -54,6 +54,16 @@ export type WeatherSource = 'auto' | 'development' | 'open-meteo' | 'supabase';
 
 export type ServiceConfig = {
   supabase: { url: string | null; anonKey: string | null; configured: boolean };
+  /**
+   * The production marketplace the Shop tab reads.
+   *
+   * A different project from the app's own backend, with its own anonymous key,
+   * because it publishes a different thing: what shops have listed, read-only. It
+   * is chosen independently so a build can have live listings without a live
+   * account backend — and so the shop data can be pointed at production while
+   * everything else stays where it is.
+   */
+  marketplace: { url: string | null; key: string | null; configured: boolean };
   /** Our Edge Functions. Each may be unconfigured independently. */
   aiEndpoint: { url: string | null; configured: boolean };
   otpEndpoint: { url: string | null; configured: boolean };
@@ -83,6 +93,8 @@ export type ServiceConfig = {
 const BUILD_ENV = {
   VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
   VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
+  VITE_MARKETPLACE_URL: import.meta.env.VITE_MARKETPLACE_URL,
+  VITE_MARKETPLACE_KEY: import.meta.env.VITE_MARKETPLACE_KEY,
   VITE_AI_ENDPOINT: import.meta.env.VITE_AI_ENDPOINT,
   VITE_OTP_ENDPOINT: import.meta.env.VITE_OTP_ENDPOINT,
   VITE_DEALER_ENDPOINT: import.meta.env.VITE_DEALER_ENDPOINT,
@@ -106,6 +118,8 @@ function read(key: BuildEnvKey): string | null {
 function build(): ServiceConfig {
   const supabaseUrl = read('VITE_SUPABASE_URL');
   const supabaseAnonKey = read('VITE_SUPABASE_ANON_KEY');
+  const marketplaceUrl = read('VITE_MARKETPLACE_URL');
+  const marketplaceKey = read('VITE_MARKETPLACE_KEY');
   const aiEndpoint = read('VITE_AI_ENDPOINT');
   const otpEndpoint = read('VITE_OTP_ENDPOINT');
   const dealerEndpoint = read('VITE_DEALER_ENDPOINT');
@@ -129,6 +143,11 @@ function build(): ServiceConfig {
       // Both halves are required. A URL without a key would produce a confusing
       // 401 rather than a clear switch to development mode.
       configured: backendLive,
+    },
+    marketplace: {
+      url: marketplaceUrl,
+      key: marketplaceKey,
+      configured: Boolean(marketplaceUrl && marketplaceKey),
     },
     weather: {
       provider:
@@ -179,7 +198,7 @@ export const serviceConfig: ServiceConfig = build();
  * stopped meaning anything. One function, one answer.
  */
 export type OtpChoice = 'demo' | 'supabase' | 'gateway' | 'development';
-export type DealerChoice = 'supabase' | 'development';
+export type DealerChoice = 'marketplace' | 'supabase' | 'development';
 
 export function resolveProviders(
   config: ServiceConfig = serviceConfig,
@@ -219,7 +238,18 @@ export function resolveProviders(
         : config.otpEndpoint.configured
           ? 'gateway'
           : 'development',
-    dealer: backendLive ? 'supabase' : 'development',
+    /*
+     * The marketplace wins when it is configured, because it is where the shops
+     * actually publish. The app's own backend remains the fallback for a build
+     * without it, and the fixture for a build with neither — so the Shop tab has
+     * an answer in all three states, and the choice is still one decision made in
+     * one place.
+     */
+    dealer: config.marketplace.configured
+      ? 'marketplace'
+      : backendLive
+        ? 'supabase'
+        : 'development',
   };
 }
 

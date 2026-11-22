@@ -5,7 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#FAF9F5" />
-    <title>App</title>
+    <meta
+      name="description"
+      content="Mandi rates, weather, crop advice and your shop — in Urdu and English."
+    />
+    <!-- The weather call is the first remote read on Home; warming its TLS
+         connection here saves a handshake on the screen that needs it most. -->
+    <link rel="preconnect" href="https://api.open-meteo.com" crossorigin />
+
+    <!--
+      Installed on a phone.
+      The manifest makes the app installable in Chrome and Edge; the `apple-*`
+      tags are what Safari reads instead — iOS ignores the manifest for the icon
+      and for the standalone flag, so both are declared. `viewport-fit=cover`
+      above is the third piece: without it an installed iOS app draws under the
+      notch and the status bar.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icons/mark.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Farmer" />
+    <meta name="application-name" content="Farmer" />
+
+    <title>Farmer</title>
   </head>
   <body>
     <div id="root"></div>

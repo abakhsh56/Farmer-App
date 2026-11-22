@@ -40,6 +40,7 @@ import {
   DevelopmentWeatherProvider,
   LocalRepository,
 } from './providers/develop';
+import { MarketplaceDealerProvider } from './providers/marketplace';
 import { OpenMeteoWeatherProvider } from './providers/openMeteo';
 import { SupabaseOtpProvider } from './providers/supabaseAuth';
 import { DemoOtpProvider } from './providers/demoAuth';
@@ -111,9 +112,11 @@ export function createServices(
     ? new SupabaseMarketProvider()
     : new DevelopmentMarketProvider();
   const dealer: DealerProvider =
-    resolved.dealer === 'supabase'
-      ? new SupabaseDealerProvider()
-      : new DevelopmentDealerProvider();
+    resolved.dealer === 'marketplace'
+      ? new MarketplaceDealerProvider()
+      : resolved.dealer === 'supabase'
+        ? new SupabaseDealerProvider()
+        : new DevelopmentDealerProvider();
   const ai: AiProvider = config.aiEndpoint.configured
     ? new RemoteAiProvider()
     : new DevelopmentAiProvider();
@@ -140,6 +143,7 @@ export function createServices(
     config,
     anyRemote:
       backendLive ||
+      config.marketplace.configured ||
       config.aiEndpoint.configured ||
       config.otpEndpoint.configured ||
       config.dealerEndpoint.configured ||

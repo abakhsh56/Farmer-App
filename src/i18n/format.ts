@@ -138,3 +138,20 @@ export function formatWeekdayDate(date: Date, locale: Locale): string {
     month: 'short',
   }).format(date);
 }
+
+/**
+ * An exact observation time for the weather header: "Tue, 10 Nov, 4:30 pm".
+ *
+ * The card's "updated 2h" is useful while scanning Home, but the weather screen
+ * has room to say *when* the reading was taken. A relative age alone cannot be
+ * checked against the farmer's own clock, which is exactly what this line is for.
+ */
+export function formatDateTime(value: number, locale: Locale): string {
+  return new Intl.DateTimeFormat(INTL_LOCALE[locale], {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(value));
+}

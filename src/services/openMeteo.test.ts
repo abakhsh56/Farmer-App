@@ -46,7 +46,11 @@ const LIVE_PAYLOAD = {
     time: ['2026-10-03', '2026-10-04', '2026-10-05'],
     temperature_2m_max: [33.6, 33.8, 33.8],
     temperature_2m_min: [23.1, 22.6, 22.8],
-    precipitation_sum: [0, 0, 0],
+    apparent_temperature_max: [40.1, 39.5, 38.2],
+    apparent_temperature_min: [26.4, 25.9, 25.1],
+    precipitation_sum: [0, 0, 1.8],
+    precipitation_probability_max: [0, 10, 80],
+    wind_speed_10m_max: [12.5, 14.2, 18.9],
     weather_code: [0, 2, 61],
   },
 };
@@ -139,6 +143,16 @@ describe('Open-Meteo provider', () => {
     }
   });
 
+  it('reuses a reading for the same location within ten minutes', async () => {
+    const { fetchImpl, provider } = providerReturning(LIVE_PAYLOAD);
+
+    const first = await provider.current(PROFILE);
+    const second = await provider.current(PROFILE);
+
+    expect(second).toBe(first);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('separates "too old" from "answered nothing", because the screen says them differently', async () => {
     const failed = await providerReturning({}, false, 503).provider.current(PROFILE);
     expect(failed.freshness).toBe('unavailable');
@@ -217,8 +231,13 @@ describe('Open-Meteo provider', () => {
       date: '2026-10-03',
       maxC: 33.6,
       minC: 23.1,
+      feelsMaxC: 40.1,
+      feelsMinC: 26.4,
       precipMm: 0,
+      precipChancePct: 0,
+      windMaxKph: 12.5,
       conditionText: 'Clear sky',
+      conditionKey: 'weather.condition.clear',
     });
     // 61 is "light rain" — the day the advice should be talking about rain.
     expect(forecast.data[2]?.conditionText).toBe('Light rain');
@@ -230,6 +249,7 @@ describe('Open-Meteo provider', () => {
   it('is chosen by configuration, not by accident', () => {
     const base: ServiceConfig = {
       supabase: { url: null, anonKey: null, configured: false },
+      marketplace: { url: null, key: null, configured: false },
       aiEndpoint: { url: null, configured: false },
       otpEndpoint: { url: null, configured: false },
       dealerEndpoint: { url: null, configured: false },

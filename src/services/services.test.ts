@@ -422,8 +422,9 @@ describe('dealer provider', () => {
       canonicalProductId: 'bt-cotton-seed',
       radiusKm: 10,
     });
-    const punjab = data[0];
-    expect(punjab?.dealerId).toBe('dealer.punjabSeed');
+    // Two shops now list this seed, so the row is found rather than assumed first.
+    const punjab = data.find((row) => row.dealerId === 'dealer.punjabSeed');
+    expect(punjab).toBeDefined();
     /* Four days since the dealer system reached this shop: the row says so, and
        the screen turns that into a sentence rather than showing the stock as if
        it were confirmed this morning. */
@@ -446,6 +447,7 @@ describe('dealer provider', () => {
 describe('registry selection', () => {
   const unconfigured: ServiceConfig = {
     supabase: { url: null, anonKey: null, configured: false },
+    marketplace: { url: null, key: null, configured: false },
     aiEndpoint: { url: null, configured: false },
     otpEndpoint: { url: null, configured: false },
     dealerEndpoint: { url: null, configured: false },
@@ -457,6 +459,7 @@ describe('registry selection', () => {
 
   const configured: ServiceConfig = {
     supabase: { url: 'https://example.supabase.co', anonKey: 'anon', configured: true },
+    marketplace: { url: null, key: null, configured: false },
     aiEndpoint: { url: 'https://example.supabase.co/functions/v1/ai', configured: true },
     otpEndpoint: { url: 'https://example.supabase.co/functions/v1/otp', configured: true },
     dealerEndpoint: { url: 'https://example.supabase.co/functions/v1/dealer', configured: true },

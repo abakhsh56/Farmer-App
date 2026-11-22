@@ -16,6 +16,43 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    /**
+     * One phone, three environments.
+     *
+     * Dev, staging and production are separate installs rather than one app with a
+     * switcher, because they talk to different backends and must be testable side by
+     * side: the `.dev` and `.staging` suffixes give each its own application id, its
+     * own data directory and its own icon label, so installing one never replaces
+     * another. Production keeps the unsuffixed id that the store release uses.
+     *
+     * The web bundle inside each APK is built for its environment by
+     * `scripts/build-apk.mjs`, which sets VITE_APP_ENV and the matching live-update
+     * channel before `vite build`; the flavor only carries the identity.
+     */
+    flavorDimensions = ["environment"]
+
+    productFlavors {
+        dev {
+            dimension "environment"
+            applicationIdSuffix ".dev"
+            versionNameSuffix "-dev"
+            resValue "string", "app_name", "Farmer Dev"
+            resValue "string", "title_activity_main", "Farmer Dev"
+        }
+        staging {
+            dimension "environment"
+            applicationIdSuffix ".staging"
+            versionNameSuffix "-staging"
+            resValue "string", "app_name", "Farmer Staging"
+            resValue "string", "title_activity_main", "Farmer Staging"
+        }
+        production {
+            dimension "environment"
+            resValue "string", "app_name", "Farmer"
+            resValue "string", "title_activity_main", "Farmer"
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
@@ -44,10 +81,22 @@ dependencies {
 
 apply from: 'capacitor.build.gradle'
 
+// Firebase's client file declares one package — `pk.agrishop.farmer`, the production
+// id. The `.dev` and `.staging` installs are different application ids, and the
+// Google Services plugin fails the build rather than leaving push unconfigured
+// ("No matching client found for package name 'pk.agrishop.farmer.dev'"). Push is a
+// production feature, and inventing a client entry for the other two would mean a
+// Firebase registration that cannot work, so their services tasks are switched off
+// and those builds simply register for nothing.
 try {
     def servicesJSON = file('google-services.json')
     if (servicesJSON.text) {
         apply plugin: 'com.google.gms.google-services'
+        tasks.whenTaskAdded { task ->
+            if (task.name.contains('GoogleServices') && !task.name.contains('Production')) {
+                task.enabled = false
+            }
+        }
     }
 } catch(Exception e) {
     logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
