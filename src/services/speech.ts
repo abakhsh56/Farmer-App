@@ -74,6 +74,15 @@ const CHUNK_CHARS = 180;
 const RATE = 0.95;
 
 /**
+ * A shade under full volume.
+ *
+ * Advice is read in a field, often with the phone held close, and the voice's own
+ * level is louder than a person speaking at that distance. This is the one
+ * control that makes it comfortable without making it inaudible beside a tractor.
+ */
+const VOICE_VOLUME = 0.8;
+
+/**
  * The speech engine, read through a check rather than assumed.
  *
  * `jsdom` has neither, and neither do locked-down browsers, so the capability is
@@ -159,7 +168,7 @@ export function splitForSpeech(text: string, limit = CHUNK_CHARS): string[] {
  * that answered in English — three en-US voices reading Urdu script — which a
  * farmer cannot tell apart from wrong advice. A voice for another language is
  * not a substitute for a missing one; the app's own Urdu voice
- * (`services/piper.ts`) is, and when it cannot run the right answer is silence.
+ * (`services/cloudVoice.ts`) is, and when it cannot run the right answer is silence.
  */
 
 export type SpeakOptions = {
@@ -200,7 +209,7 @@ function freeVoiceUrls(): void {
  * Resolves true once the first part is playing, false when nothing was made at
  * all. The caller does *not* hand Urdu to another voice when that happens — it
  * says nothing and lets the next press bring the model up — so a `false` here
- * means `piper.ts` has already logged the real cause.
+ * means `cloudVoice.ts` has already logged the real cause.
  *
  * **Why one part at a time.** The model runs on this thread, and it used to make
  * the whole passage before handing over a single WAV: 13 seconds of audio for the
@@ -210,16 +219,22 @@ function freeVoiceUrls(): void {
  * parts are handed over in reading order and played back to back, and each break
  * lands on a sentence end, so the joins are heard as pauses rather than seams.
  *
- * The first call of a page load also pays for 63 MB of model and 18 MB of
- * phonemiser; `piper.ts` keeps them afterwards, forgets a failed attempt, and
- * offers a warm-up for a finger that is already on the pill.
+ * The voice is now made by a cloud model through this app's own endpoint, so the
+ * first press pays a round trip rather than a 79 MB download. `cloudVoice.ts`
+ * caches a part by its text and offers a warm-up for a finger already on the pill.
  */
-export async function speakWithAppVoice(text: string, onEnd?: () => void): Promise<boolean> {
+export async function speakWithAppVoice(
+  text: string,
+  onEnd?: () => void,
+  onFirstSound?: () => void,
+): Promise<boolean> {
   if (typeof window === 'undefined' || typeof window.Audio === 'undefined') return false;
+
   const token = ++voiceToken;
 
-  const { synthesiseUrduSpeech } = await import('./piper');
+  const { synthesiseUrduSpeech } = await import('./cloudVoice');
   const element = (voicePlayer ??= new window.Audio());
+  element.volume = VOICE_VOLUME;
 
   /* One voice at a time: a newer press replaces the part still being heard. */
   element.onended = null;
@@ -232,6 +247,7 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
   let busy = false;
   let handed = 0;
   let answered = false;
+  let heard = false;
   let settle: (started: boolean) => void = () => undefined;
   const started = new Promise<boolean>((resolve) => {
     settle = resolve;
@@ -265,7 +281,16 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
     element.onerror = done;
     element.src = url;
     void element.play().then(
-      () => answer(true),
+      () => {
+        /* The first part that actually plays is the moment the farmer hears
+           something — the pump before this one may still be a sentence being
+           made, and a spinner that clears early is a lie. */
+        if (!heard && token === voiceToken) {
+          heard = true;
+          onFirstSound?.();
+        }
+        answer(true);
+      },
       done,
     );
   };
@@ -300,8 +325,8 @@ export async function speakWithAppVoice(text: string, onEnd?: () => void): Promi
  * Wired to the `Listen` pill's hover and focus — see `SpeechProvider.warm`.
  */
 export function warmAppVoice(text: string): void {
-  void import('./piper')
-    .then((piper) => piper.warmUrduVoice(text))
+  void import('./cloudVoice')
+    .then((voice) => voice.warmUrduVoice(text))
     .catch(() => undefined);
 }
 
@@ -325,6 +350,7 @@ export function speakText(text: string, { lang, voice, onStart, onEnd }: SpeakOp
     utterance.lang = lang;
     if (voice) utterance.voice = voice;
     utterance.rate = RATE;
+    utterance.volume = VOICE_VOLUME;
 
     if (index === 0 && onStart) utterance.onstart = () => onStart();
     if (index === parts.length - 1) {

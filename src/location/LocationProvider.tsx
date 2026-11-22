@@ -70,6 +70,17 @@ export type LocationValue = {
    * which keeps "temporary" and "saved" from being decided in two places.
    */
   searchOrigin: GeoPoint | undefined;
+  /**
+   * Where a dealer search should look from.
+   *
+   * Present for a temporary area, and for a location saved on this phone — the
+   * server cannot read a device copy, and a guest search that arrives with no
+   * coordinates is refused, which the shop list would then be tempted to show as
+   * "nothing near you". Absent only when the account itself holds the location,
+   * where the server's copy is the authority and saying nothing is the right
+   * instruction.
+   */
+  dealerOrigin: GeoPoint | undefined;
   /** What to call the active place in the UI. */
   placeLabel: string;
   isTemporary: boolean;
@@ -395,6 +406,12 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       // Only a temporary area is passed as an origin. Absent means "ask the
       // server for the saved location", so the two never compete.
       searchOrigin: temporary ? { lat: temporary.lat, lon: temporary.lon } : undefined,
+      dealerOrigin:
+        temporary !== null
+          ? { lat: temporary.lat, lon: temporary.lon }
+          : saved !== null && signedIn
+            ? undefined
+            : activePoint,
       placeLabel,
       isTemporary: temporary !== null,
       hasSaved: saved !== null,

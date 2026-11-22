@@ -1,21 +1,25 @@
-import {
-  Camera,
+import { Camera,
   ChevronLeft,
   Image as ImageIcon,
   Leaf,
+  MessageCircle,
   Mic,
   Send,
   ShieldAlert,
   Volume2,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
+import { useAiCredits } from '@/aiagent/AiCreditsProvider';
 import { SectionLabel } from '@/components/SectionLabel';
-import { LoadingState } from '@/components/States';
+import { EmptyState, LoadingState } from '@/components/States';
 import { useCredit } from '@/credit/CreditProvider';
 import { dealerNameKey } from '@/data/dealers';
 import { useLocation } from '@/location/LocationProvider';
 import { ROUNDUP } from '@/data/products';
 import { useStockists } from '@/services/hooks';
+import { useServices } from '@/services/registry';
+import type { AiAnswer, AiCitation } from '@/services/types';
 import { verdictFor, type Verdict } from '@/scan/analyze';
 import { useSession } from '@/session/SessionProvider';
 import {
@@ -31,7 +35,7 @@ import { useLocale } from '@/i18n/LocaleProvider';
 import type { MessageKey } from '@/i18n/catalog';
 import { formatMoney, formatNumber, formatRelativeTime, intlLocale } from '@/i18n/format';
 
-type Step = 'capture' | 'crop' | 'symptom' | 'analysing' | 'result';
+type Step = 'capture' | 'crop' | 'symptom' | 'analysing' | 'blocked' | 'result';
 
 /**
  * The platform's speech recogniser, which the DOM typings do not carry. Declared
@@ -63,6 +67,14 @@ const CROPS: ReadonlyArray<{ nameKey: MessageKey; price: number }> = [
   { nameKey: 'crop.rice', price: 4300 },
 ];
 
+/** The catalogue key is not the crop code the gateway speaks. */
+const CROP_CODES: Record<string, string> = {
+  'crop.cotton': 'cotton',
+  'crop.wheat': 'wheat',
+  'crop.maize': 'maize',
+  'crop.rice': 'rice',
+};
+
 const SYMPTOMS: ReadonlyArray<MessageKey> = [
   'scan.symptom.holes',
   'scan.symptom.wilting',
@@ -79,12 +91,51 @@ type Turn =
   | { id: number; from: 'farmer'; text: string }
   | { id: number; from: 'assistant'; verdict: Verdict };
 
-export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
+/**
+ * A gateway answer and a local fallback are the same three outcomes, so the
+ * screen has one rendering path. A low-confidence answer is escalated rather
+ * than shown as a treatment, because the gateway's confidence is about evidence,
+ * not tone.
+ */
+function verdictFromAnswer(answer: AiAnswer): Verdict {
+  if (answer.gate === 'off_domain') return { kind: 'refuse', gate: 'off_domain' };
+  if (answer.gate === 'not_covered' || answer.escalate) {
+    return { kind: 'escalate', gate: 'not_covered' };
+  }
+  return {
+    kind: 'answer',
+    gate: 'agriculture',
+    ...(answer.text ? { text: answer.text } : {}),
+    ...(answer.citations.length > 0 ? { citations: answer.citations } : {}),
+    ...(answer.generation ? { generation: answer.generation } : {}),
+    ...(answer.caveats.length > 0 ? { caveats: answer.caveats } : {}),
+  };
+}
+
+export function ScanScreen({
+  onOpenDealers,
+  onOpenAgent,
+}: {
+  onOpenDealers: () => void;
+  /** The conversational half of the same tab. */
+  onOpenAgent?: () => void;
+}) {
   const { t, locale } = useLocale();
   const credit = useCredit();
+  /*
+   * The daily allowance. A photo analysis is the expensive AI action, so it is
+   * charged here — before the result is produced — and a farmer without the
+   * credits is told so instead of being shown a diagnosis the ledger did not
+   * record. The follow-up questions below charge as conversation.
+   */
+  const aiCredits = useAiCredits();
+  const services = useServices();
   const { requestIdentity } = useSession();
   const [step, setStep] = useState<Step>('capture');
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [thinking, setThinking] = useState(false);
+  const [fallback, setFallback] = useState(false);
+  const nextTurnId = useRef(1);
   const [expertAsked, setExpertAsked] = useState(false);
   const [crop, setCrop] = useState<string>('crop.cotton');
   const [symptom, setSymptom] = useState<string>('scan.symptom.holes');
@@ -129,6 +180,62 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
     if (step === 'crop') setStep('capture');
     else if (step === 'symptom') setStep('crop');
     else setStep('capture');
+  };
+
+  /**
+   * Leaving the questionnaire for the analysis is the moment the AI work is
+   * actually requested, so it is the moment the allowance is spent. A refusal
+   * lands on its own screen: the farmer is not shown a spinner for work that was
+   * never going to happen.
+   */
+  const startAnalysis = () => {
+    if (!aiCredits.spend('scan')) {
+      setStep('blocked');
+      return;
+    }
+    setStep('analysing');
+  };
+
+  /**
+   * The follow-up goes to the real assistant, not to a second gate copy in the
+   * screen. The crop the farmer selected is the one the answer should be about;
+   * the gateway adds the authenticated farmer's crops, district and interests.
+   * If the gateway is unavailable, the existing deterministic gate still answers
+   * and the screen says which path produced the reply.
+   */
+  const askAssistant = async (text: string) => {
+    if (thinking) return;
+    /* One turn, one credit — the same price as a turn in the assistant, because it
+       is the same assistant answering. */
+    if (!aiCredits.spend('chat')) {
+      toast.error(t(aiCredits.refusedReason('chat') ?? 'agent.credits.exhausted'));
+      return;
+    }
+    setThinking(true);
+    setFallback(false);
+    const id = nextTurnId.current++;
+    setTurns((current) => [...current, { id, from: 'farmer', text }]);
+    setQuestion('');
+
+    const cropCode = CROP_CODES[crop];
+    try {
+      const answer = await services.ai.ask(text, {
+        ...(cropCode ? { cropCode } : {}),
+        language: locale,
+      });
+      setTurns((current) => [
+        ...current,
+        { id: nextTurnId.current++, from: 'assistant', verdict: verdictFromAnswer(answer) },
+      ]);
+    } catch {
+      setTurns((current) => [
+        ...current,
+        { id: nextTurnId.current++, from: 'assistant', verdict: verdictFor(text) },
+      ]);
+      setFallback(true);
+    } finally {
+      setThinking(false);
+    }
   };
 
   /**
@@ -183,6 +290,26 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
           <ImageIcon className="size-4.5" aria-hidden />
           {t('scan.gallery')}
         </Button>
+
+        {/* The other way to ask. Same tab, same services, same allowance — a
+            farmer who would rather describe the problem than photograph it. */}
+        {onOpenAgent ? (
+          <Button
+            variant="outline"
+            className="mt-2 h-12 w-full rounded-md"
+            onClick={onOpenAgent}
+          >
+            <MessageCircle className="size-4.5" aria-hidden />
+            {t('scan.openAgent')}
+          </Button>
+        ) : null}
+
+        <p className="mt-3 text-caption text-muted-foreground">
+          {t('agent.credits.costs', {
+            chat: aiCredits.costOf('chat'),
+            scan: aiCredits.costOf('scan'),
+          })}
+        </p>
       </div>
     );
   }
@@ -240,12 +367,45 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
           ))}
         </Choicebox>
 
-        <Button
-          className="mt-auto h-12 w-full rounded-md"
-          onClick={() => setStep(isCrop ? 'symptom' : 'analysing')}
-        >
+        <Button className="mt-auto h-12 w-full rounded-md" onClick={() => (isCrop ? setStep('symptom') : startAnalysis())}>
           {t('common.next')}
         </Button>
+      </div>
+    );
+  }
+
+  if (step === 'blocked') {
+    return (
+      <div className="flex h-full flex-col px-4 pt-4 pb-6">
+        <header className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label={t('common.back')}
+            onClick={back}
+            className="-ms-2 grid size-9 shrink-0 place-items-center rounded-full"
+          >
+            <ChevronLeft className="size-5 rtl:rotate-180" aria-hidden />
+          </button>
+          <h1 className="text-title">{t('scan.title')}</h1>
+        </header>
+
+        <EmptyState
+          icon={ShieldAlert}
+          title={t(aiCredits.refusedReason('scan') ?? 'agent.credits.exhausted')}
+          body={t('agent.credits.blockedBody', {
+            left: formatNumber(aiCredits.remaining, locale),
+            cost: aiCredits.costOf('scan'),
+            time: new Intl.DateTimeFormat(intlLocale(locale), {
+              hour: 'numeric',
+              minute: '2-digit',
+            }).format(new Date(aiCredits.resetsAt)),
+          })}
+          action={
+            <Button variant="outline" className="h-11 rounded-full" onClick={() => setStep('capture')}>
+              {t('agent.credits.backToStart')}
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -426,9 +586,26 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
             </div>
           ) : turn.verdict.kind === 'answer' ? (
             <Bubble key={turn.id}>
+              {turn.verdict.generation === 'retrieval' ? (
+                <p className="mb-1.5 text-caption font-medium text-brand">
+                  {t('scan.answer.retrieval')}
+                </p>
+              ) : null}
               <p className="text-body-sm leading-relaxed">
-                {t('scan.answer.grounded', { source: t('source.punjabAgri') })}
+                {turn.verdict.text ?? t('scan.answer.local')}
               </p>
+              {turn.verdict.generation === 'model' ? (
+                <p className="mt-2 text-caption leading-relaxed text-muted-foreground">
+                  {t('scan.answer.model')}
+                </p>
+              ) : null}
+              {turn.verdict.citations ? (
+                <AnswerSources
+                  citations={turn.verdict.citations}
+                  locale={locale}
+                  t={t}
+                />
+              ) : null}
             </Bubble>
           ) : turn.verdict.kind === 'refuse' ? (
             <Bubble key={turn.id}>
@@ -460,23 +637,27 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
             </Bubble>
           ),
         )}
+
+        {thinking ? (
+          <p role="status" className="px-1 text-caption text-muted-foreground">
+            {t('scan.assistant.thinking')}
+          </p>
+        ) : null}
+        {fallback ? (
+          <p role="status" className="px-1 text-caption text-muted-foreground">
+            {t('scan.assistant.fallback')}
+          </p>
+        ) : null}
       </div>
 
       <form
         className="flex items-center gap-2 border-t border-border p-3"
+        aria-busy={thinking}
         onSubmit={(event) => {
           event.preventDefault();
           const text = question.trim();
-          if (!text) return;
-          /* The gate runs before anything is shown, so a refusal is a decision
-             the assistant made — not a bubble that failed to appear. */
-          const verdict = verdictFor(text);
-          setTurns((current) => [
-            ...current,
-            { id: Date.now(), from: 'farmer', text },
-            { id: Date.now() + 1, from: 'assistant', verdict },
-          ]);
-          setQuestion('');
+          if (!text || thinking) return;
+          void askAssistant(text);
         }}
       >
         <label className="sr-only" htmlFor="scan-question">
@@ -525,6 +706,7 @@ export function ScanScreen({ onOpenDealers }: { onOpenDealers: () => void }) {
           type="submit"
           size="icon"
           aria-label={t('scan.sendAria')}
+          disabled={thinking}
           className="size-9 shrink-0 rounded-full"
         >
           <Send className="size-4 rtl:rotate-180" aria-hidden />
@@ -545,6 +727,94 @@ function stockistName(
 ): string {
   const key = dealerNameKey(dealerId);
   return key ? t(key) : reported;
+}
+
+function sourceTierKey(tier: AiCitation['evidenceTier']): MessageKey {
+  if (tier === 'verified') return 'scan.sources.verified';
+  if (tier === 'community') return 'scan.sources.community';
+  return 'scan.sources.supplementary';
+}
+
+function sourceDate(value: string | undefined, locale: Parameters<typeof intlLocale>[0]): string | null {
+  if (!value) return null;
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(intlLocale(locale), {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(date);
+}
+
+/**
+ * The evidence under an answer. It is deliberately a list of published entries,
+ * not a sentence naming a department: a model answer can only claim the sources
+ * that the gateway actually retrieved.
+ */
+function AnswerSources({
+  citations,
+  locale,
+  t,
+}: {
+  citations: AiCitation[];
+  locale: Parameters<typeof intlLocale>[0];
+  t: (key: MessageKey, values?: Record<string, string | number>) => string;
+}) {
+  const sources = citations.filter((citation) => citation.kind === 'knowledge');
+  if (sources.length === 0) return null;
+
+  return (
+    <section aria-label={t('scan.sources.title')} className="mt-3 border-t border-border/60 pt-2.5">
+      <p className="text-overline text-muted-foreground uppercase">{t('scan.sources.title')}</p>
+      <ul className="mt-1.5 space-y-2">
+        {sources.map((citation, index) => {
+          const tier = citation.evidenceTier ?? 'supplementary';
+          const date = citation.updatedOn ?? citation.publishedOn;
+          const dateLabel = date
+            ? t(citation.updatedOn ? 'scan.sources.updated' : 'scan.sources.published', {
+                date: sourceDate(date, locale) ?? date,
+              })
+            : citation.accessedOn
+              ? t('scan.sources.accessed', {
+                  date: sourceDate(citation.accessedOn, locale) ?? citation.accessedOn,
+                })
+              : t('scan.sources.noDate');
+
+          return (
+            <li key={`${citation.slug ?? citation.label}-${index}`} className="text-label leading-snug">
+              <span className="block font-medium">{citation.label}</span>
+              <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-caption text-muted-foreground">
+                <span
+                  className={`rounded-sm px-1.5 py-0.5 ${
+                    tier === 'verified'
+                      ? 'bg-brand-soft text-brand'
+                      : tier === 'community'
+                        ? 'bg-muted text-muted-foreground'
+                        : 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-100'
+                  }`}
+                >
+                  {t(sourceTierKey(tier))}
+                </span>
+                <span>{citation.source ?? t('scan.sources.unknown')}</span>
+                {citation.version ? <span>v{citation.version}</span> : null}
+                <span>{dateLabel}</span>
+              </span>
+              {citation.sourceUrl?.startsWith('https://') ? (
+                <a
+                  href={citation.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-0.5 inline-block text-caption font-medium text-brand underline underline-offset-2"
+                >
+                  {t('scan.sources.open')}
+                </a>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
 }
 
 /** An incoming message row: assistant avatar, then the bubble. */

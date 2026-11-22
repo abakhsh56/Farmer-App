@@ -37,6 +37,9 @@ const ENDPOINT = 'https://api.open-meteo.com/v1/forecast';
 /** How old a reading may be before the app stops letting advice depend on it. */
 const USABLE_AGE_MS = 2 * 60 * 60 * 1000;
 
+/** How long a successful reading is reused before the vendor is asked again. */
+const WEATHER_CACHE_MS = 10 * 60 * 1000;
+
 /**
  * WMO 4677 weather codes, as Open-Meteo reports them, reduced to the handful of
  * conditions a farmer's screen needs to name.
@@ -108,8 +111,12 @@ const CURRENT_FIELDS = [
 const DAILY_FIELDS = [
   'temperature_2m_max',
   'temperature_2m_min',
+  'apparent_temperature_max',
+  'apparent_temperature_min',
   'precipitation_sum',
+  'precipitation_probability_max',
   'weather_code',
+  'wind_speed_10m_max',
 ].join(',');
 
 export function emptyWeatherNow(): WeatherNow {
@@ -126,6 +133,17 @@ export function emptyWeatherNow(): WeatherNow {
 
 export class OpenMeteoWeatherProvider implements WeatherProvider {
   readonly name = 'Open-Meteo';
+
+  /**
+   * The last successful reading per rounded location, for ten minutes.
+   *
+   * Home unmounts when the farmer visits another tab, so returning to it used
+   * to re-run the same vendor call and show the weather skeleton for the second
+   * Open-Meteo takes to answer. A reading minutes old is still the reading the
+   * screen describes — its own age label and freshness rules remain in force —
+   * and the cache belongs to the provider instance, so a new launch starts clean.
+   */
+  private readonly recent = new Map<string, { at: number; reading: Sourced<WeatherNow> }>();
 
   constructor(
     /*
@@ -167,6 +185,10 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
   }
 
   async current(point: GeoPoint): Promise<Sourced<WeatherNow>> {
+    const cacheKey = `${point.lat.toFixed(3)},${point.lon.toFixed(3)}`;
+    const cached = this.recent.get(cacheKey);
+    if (cached && this.now() - cached.at < WEATHER_CACHE_MS) return cached.reading;
+
     const fetchedAt = this.now();
     try {
       const body = await this.get(point, `current=${CURRENT_FIELDS}`);
@@ -175,7 +197,7 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
       const code = num(current.weather_code);
       const condition = code === null ? undefined : CONDITIONS[code];
 
-      return {
+      const reading: Sourced<WeatherNow> = {
         data: {
           tempC: num(current.temperature_2m),
           feelsLikeC: num(current.apparent_temperature),
@@ -194,6 +216,13 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
         freshness: fetchedAt - observedAt <= USABLE_AGE_MS ? 'fresh' : 'stale',
         status: 'live',
       };
+
+      if (this.recent.size >= 24) {
+        const oldest = this.recent.keys().next().value;
+        if (oldest !== undefined) this.recent.delete(oldest);
+      }
+      this.recent.set(cacheKey, { at: fetchedAt, reading });
+      return reading;
     } catch (error) {
       return {
         data: emptyWeatherNow(),
@@ -219,7 +248,17 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
       const times = Array.isArray(daily.time) ? daily.time : [];
       const maxes = Array.isArray(daily.temperature_2m_max) ? daily.temperature_2m_max : [];
       const mins = Array.isArray(daily.temperature_2m_min) ? daily.temperature_2m_min : [];
+      const feelsMaxes = Array.isArray(daily.apparent_temperature_max)
+        ? daily.apparent_temperature_max
+        : [];
+      const feelsMins = Array.isArray(daily.apparent_temperature_min)
+        ? daily.apparent_temperature_min
+        : [];
       const rain = Array.isArray(daily.precipitation_sum) ? daily.precipitation_sum : [];
+      const chances = Array.isArray(daily.precipitation_probability_max)
+        ? daily.precipitation_probability_max
+        : [];
+      const winds = Array.isArray(daily.wind_speed_10m_max) ? daily.wind_speed_10m_max : [];
       const codes = Array.isArray(daily.weather_code) ? daily.weather_code : [];
 
       const out: WeatherDay[] = [];
@@ -231,8 +270,13 @@ export class OpenMeteoWeatherProvider implements WeatherProvider {
           date,
           minC: num(mins[index]),
           maxC: num(maxes[index]),
+          feelsMinC: num(feelsMins[index]),
+          feelsMaxC: num(feelsMaxes[index]),
           precipMm: num(rain[index]),
+          precipChancePct: num(chances[index]),
+          windMaxKph: num(winds[index]),
           conditionText: code === null ? null : (CONDITIONS[code]?.text ?? null),
+          conditionKey: code === null ? undefined : CONDITIONS[code]?.key,
         });
       }
 

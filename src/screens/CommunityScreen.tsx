@@ -8,6 +8,7 @@ import { AUTHORS, FILTERS } from '@/data/community';
 import { useLocale } from '@/i18n/LocaleProvider';
 import { initialsOf } from '@/lib/initials';
 import { Composer } from '@/components/community/Composer';
+import { ForYou } from '@/components/community/ForYou';
 import { GuidelinesSheet } from '@/components/community/Moderation';
 import { PostCard } from '@/components/community/PostCard';
 import { StoryRow, StoryViewer } from '@/components/community/Stories';
@@ -58,7 +59,12 @@ export function CommunityScreen() {
 
   if (openPost) return <ThreadView />;
 
-  const isAll = filter === 'all';
+  /*
+   * `for_you` reads the whole feed (see FILTERS), so an empty one is an empty
+   * community, not a filter that hid everything — offering "Show all" there
+   * would send the farmer back to the same nothing.
+   */
+  const isAll = filter === 'all' || filter === 'for_you';
 
   return (
     <div className="flex min-h-full flex-col px-4 pt-4">
@@ -127,6 +133,11 @@ export function CommunityScreen() {
           </button>
         </p>
       ))}
+
+      {/* The advice panel Home used to carry: still the system's own ranked
+          recommendations, now sharing a tab with the reports they sit beside.
+          Home keeps the crop watch and the scanner. */}
+      {filter === 'for_you' && status === 'ready' ? <ForYou /> : null}
 
       {status === 'loading' ? <LoadingState label={t('community.loading')} /> : null}
 

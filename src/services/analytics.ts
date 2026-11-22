@@ -131,41 +131,83 @@ export function initAnalytics(): Analytics {
 
   if (!key) return noop;
 
-  let started = false;
+  type QueuedEvent = {
+    event: AnalyticsEvent;
+    properties: Record<string, string | number | boolean>;
+  };
+
+  const queue: QueuedEvent[] = [];
+  let capture:
+    | ((event: string, properties: Record<string, string | number | boolean>) => void)
+    | null = null;
+  let loading: Promise<void> | null = null;
+
+  const flush = () => {
+    if (!capture) return;
+    for (const item of queue.splice(0)) capture(item.event, item.properties);
+  };
+
+  const start = () => {
+    if (loading) return;
+    /*
+     * The SDK is ~310 kB. It used to be imported by the first `track()` call,
+     * which happens during start-up because the first screen view is recorded
+     * there — so every farmer downloaded it before they could use the app.
+     * Importing after `load` and an idle slot keeps it off the critical path
+     * without losing the early events: they wait in a bounded queue.
+     */
+    loading = import('posthog-js')
+      .then(({ default: posthog }) => {
+        posthog.init(key, {
+          api_host: host,
+          // No person profiles: identity here is a phone number, and this
+          // module refuses to let one become an analytics identity.
+          person_profiles: 'never',
+          // Autocapture would quietly harvest input fields, which is
+          // exactly where a one-time code is typed.
+          autocapture: false,
+          capture_pageview: false,
+          capture_pageleave: false,
+          // Session replay would film a farmer handling their own land and
+          // credit details. Off, permanently, not just by default.
+          disable_session_recording: true,
+          capture_exceptions: false,
+          advanced_disable_flags: true,
+          request_batching: true,
+          persistence: 'localStorage',
+        });
+        capture = (event, properties) => posthog.capture(event, properties);
+        flush();
+      })
+      .catch(() => undefined);
+  };
+
+  const schedule = () => {
+    if (loading || typeof window === 'undefined') return;
+
+    const run = () => {
+      const idle = (
+        window as Window & {
+          requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+        }
+      ).requestIdleCallback;
+
+      if (typeof idle === 'function') idle(start, { timeout: 3000 });
+      else window.setTimeout(start, 1500);
+    };
+
+    if (document.readyState === 'complete') run();
+    else window.addEventListener('load', run, { once: true });
+  };
 
   return {
     configured: true,
 
     track(event, properties) {
-      // Imported on first use rather than at module load, so a build without a
-      // key never downloads or runs the SDK. The failure path is swallowed:
-      // analytics must never be the reason a farmer cannot open the app.
-      void import('posthog-js')
-        .then(({ default: posthog }) => {
-          if (!started) {
-            posthog.init(key, {
-              api_host: host,
-              // No person profiles: identity here is a phone number, and this
-              // module refuses to let one become an analytics identity.
-              person_profiles: 'never',
-              // Autocapture would quietly harvest input fields, which is
-              // exactly where a one-time code is typed.
-              autocapture: false,
-              capture_pageview: false,
-              capture_pageleave: false,
-              // Session replay would film a farmer handling their own land and
-              // credit details. Off, permanently, not just by default.
-              disable_session_recording: true,
-              capture_exceptions: false,
-              advanced_disable_flags: true,
-              request_batching: true,
-              persistence: 'localStorage',
-            });
-            started = true;
-          }
-          posthog.capture(event, sanitise(properties));
-        })
-        .catch(() => undefined);
+      // Bounded, so a long session before the SDK arrives cannot grow forever.
+      if (queue.length >= 50) queue.shift();
+      queue.push({ event, properties: sanitise(properties) });
+      schedule();
     },
 
     screen(name) {
