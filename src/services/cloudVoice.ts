@@ -27,10 +27,23 @@
  *    pressed twice; the same sentence is not paid for twice in a session.
  */
 
-/** Where the voice endpoint lives. Same origin by default (the Vercel function). */
-const ENDPOINT = (
-  (import.meta.env.VITE_VOICE_ENDPOINT as string | undefined) ?? '/api/tts'
-).trim();
+/**
+ * Where the voice endpoint lives.
+ *
+ * Two hosts, tried in order, because the same build runs in three places: the
+ * Vercel deployment serves `/api/tts` same-origin, and the Worker below is the
+ * endpoint that exists for the APKs and for a dev server, which has no functions
+ * at all. The first that answers is remembered for the rest of the session, so the
+ * farmer pays the failed attempt once.
+ *
+ * Both hold the key server-side; neither receives it from here. `VITE_VOICE_ENDPOINT`
+ * overrides the first one for a deployment that hosts the function elsewhere.
+ */
+const PRIMARY = ((import.meta.env.VITE_VOICE_ENDPOINT as string | undefined) ?? '/api/tts').trim();
+const FALLBACK = 'https://farmer-voice-urdu-tts-d1zqij.freebuff.site';
+
+/** The host that last answered, so a dead primary is not retried every sentence. */
+let chosen: string | null = null;
 
 /**
  * How much text one request carries.
@@ -80,31 +93,53 @@ function split(text: string): string[] {
   return chunks;
 }
 
+function candidates(): string[] {
+  if (chosen) return [chosen];
+  return [...new Set([PRIMARY, FALLBACK].filter((url) => url.length > 0))];
+}
+
 async function fetchPart(text: string, signal?: AbortSignal): Promise<Blob> {
   const cached = parts.get(text);
   if (cached) return cached;
 
-  const response = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, language: 'ur-PK' }),
-    signal,
-  });
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
+  for (const endpoint of candidates()) {
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, language: 'ur-PK' }),
+        signal,
+      });
+    } catch (failure) {
+      if (signal?.aborted) throw failure;
+      lastError = failure instanceof Error ? failure : new Error('The voice could not be reached.');
+      continue;
+    }
+
+    if (response.ok) {
+      const audio = await response.blob();
+      chosen = endpoint;
+      parts.set(text, audio);
+      return audio;
+    }
+
     /*
-     * The server answers with a short machine code rather than prose, so the app
-     * can say the one thing that is true: the voice is not available yet, and the
-     * sentence on screen is still the advice. `voice-not-configured` is the normal
-     * answer until `GEMINI_API_KEY` is set in the environment.
+     * A refusal is a short machine code, not prose. 429 is the one answer worth
+     * stopping for: the provider's own free-tier limit, which the other host would
+     * hit just the same.
      */
+    if (response.status === 429) {
+      throw new Error('The Urdu voice is busy. Try again in a moment.');
+    }
+
     const detail = await response.text().catch(() => '');
-    throw new Error(`The Urdu voice is not available (${response.status}). ${detail}`.trim());
+    lastError = new Error(`The Urdu voice is not available (${response.status}). ${detail}`.trim());
   }
 
-  const audio = await response.blob();
-  parts.set(text, audio);
-  return audio;
+  throw lastError ?? new Error('The Urdu voice is not available.');
 }
 
 /**
