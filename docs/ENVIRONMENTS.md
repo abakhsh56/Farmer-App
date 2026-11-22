@@ -85,9 +85,18 @@ Project state (applied, not a to-do):
   flavour. The `.dev` and `.staging` ids have no Firebase client and their services
   tasks stay switched off, so those builds register for nothing.
 
-The service-account key itself sits in `.secrets/firebase-service-account.json`,
-which is git-ignored, and is never read by the app; it is only ever uploaded as a
-function secret.
+The Firebase project is **`farmer-app-c4590`**
+(<https://console.firebase.google.com/project/farmer-app-c4590>), Android package
+`pk.agrishop.farmer`. Its two credentials are kept out of git and never printed:
+
+| What | Where it lives | Used by |
+| --- | --- | --- |
+| Service-account key | `.secrets/firebase-service-account.json` (git-ignored) | uploaded as the `FCM_SERVICE_ACCOUNT` secret; never read by the app |
+| Shared caller token | `.secrets/shop-push-token.txt` (git-ignored) | the `SHOP_PUSH_TOKEN` secret and the Vault secret `shop_push_token` |
+
+Both are git-ignored and both survive in those three places, so nothing has to be
+asked for again. Rotating either is: write the new value to the file, re-run the
+secret upload, and update Vault — no code change.
 
 What is still missing, and it is Apple's to give: iOS delivery needs an APNs
 `.p8` key uploaded to the same Firebase project, which needs an Apple Developer
