@@ -63,3 +63,8 @@ screenshots/gallery.html
 
 # Local secret files handed to a deployment tool. Never committed.
 .secrets/
+
+# Per-environment builds deployed to each environment URL.
+dist-dev/
+dist-staging/
+dist-production/
