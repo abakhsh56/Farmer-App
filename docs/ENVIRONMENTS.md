@@ -52,13 +52,44 @@ environment URL in Safari and *Share → Add to Home Screen*.
 
 ## Push notifications
 
-`device_push_tokens` holds one row per device, written by the app through
-`register_push_token`. `supabase/functions/notify-shop-owner` sends to those
-devices over FCM HTTP v1 and answers `503 not-configured` until these are set:
+Configured and deployed. The chain, end to end:
 
-- `FCM_SERVICE_ACCOUNT` — the Firebase service-account JSON, as one line
-- `FCM_PROJECT_ID` — the Firebase project id
+  1. The owner taps *Enable notifications* on their shop card, which asks for the
+     permission at the moment the reason is on screen and calls
+     `register_push_token` (`src/services/push.ts`).
+  2. `device_push_tokens` keeps one row per device — a counter phone and a
+     personal one are two rows, and registering the same install twice updates
+     its row instead of duplicating the notifications.
+  3. A farmer scanning the shop's QR inserts a `dealer_farmer_links` row with
+     `established_by = 'shop_qr'`, and the trigger `dealer_farmer_links_notify_shop`
+     queues a `net.http_post` to the function. It is asynchronous on purpose: a
+     delivery failure loses a notification, never the farmer's join.
+  4. `supabase/functions/notify-shop-owner` signs a service-account JWT with
+     WebCrypto, exchanges it for an FCM access token, and sends over FCM HTTP v1.
+     Tokens FCM reports as gone are deleted, so an uninstalled phone is not retried
+     forever.
 
-Android needs the `google-services.json` for the production flavour (already wired
-in `android/app/build.gradle`); iOS needs the APNs key uploaded to the same
-Firebase project.
+Project state (applied, not a to-do):
+
+- Supabase secrets `FCM_SERVICE_ACCOUNT` and `FCM_PROJECT_ID` (`farmer-app-c4590`),
+  and `SHOP_PUSH_TOKEN`, the shared secret the trigger presents as its caller proof.
+  It is a purpose-made token rather than the service-role key: one caller does not
+  need the key that opens every table.
+- The same token in Vault as `shop_push_token`, which the trigger reads. It lives in
+  Vault, not in the migration, because a key in version control is a published key.
+  Without it the trigger logs a warning and the join still commits.
+- `supabase/config.toml` turns the gateway's JWT check off for this one function
+  (`verify_jwt = false`), because a database trigger has no JWT to present; the
+  function's own token check is the door, and a caller without the token gets 403.
+- `android/app/google-services.json` for `pk.agrishop.farmer`, the production
+  flavour. The `.dev` and `.staging` ids have no Firebase client and their services
+  tasks stay switched off, so those builds register for nothing.
+
+The service-account key itself sits in `.secrets/firebase-service-account.json`,
+which is git-ignored, and is never read by the app; it is only ever uploaded as a
+function secret.
+
+What is still missing, and it is Apple's to give: iOS delivery needs an APNs
+`.p8` key uploaded to the same Firebase project, which needs an Apple Developer
+account. Until then the iOS build can request permission and register a token, but
+FCM cannot reach it.

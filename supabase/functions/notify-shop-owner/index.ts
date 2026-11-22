@@ -5,8 +5,14 @@
  *
  * Called server-to-server — by a trigger on `dealer_farmer_links` when a farmer
  * joins, or by the messaging path when one writes — never by a client. A client
- * that could call this could notify any shop in the app, so the caller must hold
- * the service-role key, which no build ships.
+ * that could call this could notify any shop in the app, so the caller must prove
+ * it is the database.
+ *
+ * That proof is `SHOP_PUSH_TOKEN`, a secret generated for exactly this hop and
+ * shared with the trigger through Vault. It is deliberately *not* the service-role
+ * key: the service-role key opens every table in the project, and one caller does
+ * not need the whole building to post a notification. The token is only ever
+ * compared here, so a leak of it costs a forged push, not the database.
  *
  * Delivery is FCM HTTP v1, which is what both platforms take: Android natively,
  * iOS through APNs linked inside the Firebase project. The service account is
@@ -30,6 +36,7 @@ type Payload = {
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SERVICE_ROLE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+const CALLER_PROOF = Deno.env.get('SHOP_PUSH_TOKEN') ?? '';
 const SERVICE_ACCOUNT = Deno.env.get('FCM_SERVICE_ACCOUNT') ?? '';
 const PROJECT_ID = Deno.env.get('FCM_PROJECT_ID') ?? '';
 
@@ -110,9 +117,11 @@ Deno.serve(async (request) => {
 
   if (!SUPABASE_URL || !SERVICE_ROLE) return json({ error: 'not-configured' }, 503);
 
-  /* Server-to-server only: the service-role key is the caller's proof. */
+  /* Server-to-server only: the trigger's shared token is the caller's proof. */
+  if (!CALLER_PROOF) return json({ error: 'not-configured', missing: ['SHOP_PUSH_TOKEN'] }, 503);
+
   const authorization = request.headers.get('Authorization') ?? '';
-  if (authorization !== `Bearer ${SERVICE_ROLE}`) return json({ error: 'forbidden' }, 403);
+  if (authorization !== `Bearer ${CALLER_PROOF}`) return json({ error: 'forbidden' }, 403);
 
   const payload = (await request.json().catch(() => null)) as Payload | null;
   if (!payload?.dealer_id || !payload.title) return json({ error: 'dealer_id-required' }, 400);
