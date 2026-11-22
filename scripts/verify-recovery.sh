@@ -293,8 +293,12 @@ expect_eq "restored snapshot matches the source" "$RESTORED" "$SOURCE"
 
 echo
 echo "-- schema, security and integrity details on the restored copy --"
-expect_eq "public tables" "$(psql_db restored "select count(*) from pg_tables where schemaname='public'")" "90"
-expect_eq "tables with RLS" "$(psql_db restored "select count(*) from pg_tables t where t.schemaname='public' and exists (select 1 from pg_class c where c.relname=t.tablename and c.relrowsecurity)")" "90"
+# The schema's own size, and it moves with every migration that adds a table: a
+# restore that is missing one is the failure this drill exists to catch, so the
+# number is stated here rather than derived from the restored copy. 92 since the
+# shop join codes and the per-device push tokens landed.
+expect_eq "public tables" "$(psql_db restored "select count(*) from pg_tables where schemaname='public'")" "92"
+expect_eq "tables with RLS" "$(psql_db restored "select count(*) from pg_tables t where t.schemaname='public' and exists (select 1 from pg_class c where c.relname=t.tablename and c.relrowsecurity)")" "92"
 expect_eq "unvalidated foreign keys" "$(psql_db restored "select count(*) from pg_constraint where contype='f' and not convalidated")" "0"
 expect_eq "orphaned forecast districts" "$(psql_db restored "select count(*) from public.climate_forecasts f left join public.districts d on d.code=f.district_code where d.code is null")" "0"
 expect_eq "knowledge citation sources resolve" "$(psql_db restored "select count(*) from public.agri_knowledge_entries e left join public.agri_knowledge_sources s on s.code=e.source_code where e.source_code is not null and s.code is null")" "0"
