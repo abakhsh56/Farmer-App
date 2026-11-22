@@ -1,0 +1,14 @@
+# Supabase CLI configuration.
+#
+# One project backs every environment (dev, staging, production all read the same
+# credentials — see docs/ENVIRONMENTS.md), so this is the project id the CLI
+# targets when it is run from the repository root.
+
+project_id = "swmbmtvwgksicfnfsehg"
+
+[functions.notify-shop-owner]
+# The function is called by a database trigger, not by a signed-in user, and it
+# proves that with its own shared secret (SHOP_PUSH_TOKEN) rather than a JWT the
+# gateway would have to accept. So the gateway's JWT check is off here and the
+# function's own check is the only door — a caller without the token gets 403.
+verify_jwt = false
