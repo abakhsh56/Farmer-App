@@ -9,6 +9,8 @@ import { useLocale } from '@/i18n/LocaleProvider';
 import type { MessageKey } from '@/i18n/catalog';
 import { initialsOf } from '@/lib/initials';
 import { useSession } from '@/session/SessionProvider';
+import { useShopApi } from '@/shop/ShopApiProvider';
+import { ShopConnectSheet, ShopRequestSheet } from '@/shop/ShopRequestSheet';
 
 type Props = { onBrowseDealers: () => void };
 
@@ -30,6 +32,21 @@ export function ChatScreen({ onBrowseDealers }: Props) {
   const chat = useChat();
   const [draft, setDraft] = useState('');
   const [query, setQuery] = useState('');
+  /*
+   * The shop's own thread, when this build is connected to one. The screen asks it
+   * only for the things the local store could never know: the shop's current name,
+   * the offers waiting on an answer, and the notices the shop has sent.
+   */
+  const shop = useShopApi();
+  const [sheet, setSheet] = useState<null | 'credit' | 'visit'>(null);
+  const [connecting, setConnecting] = useState(false);
+  const liveDealerId = shop.credential?.shopId ?? null;
+
+  /** The shop's name, which on the live source comes from the shop, not a catalogue. */
+  const nameFor = (dealerId: string) =>
+    shop.configured && dealerId === liveDealerId
+      ? shop.thread?.shopName || shop.credential?.shopName || lineText(dealerId, t)
+      : lineText(dealerId, t);
 
   const list = useMemo(
     () =>
@@ -50,11 +67,12 @@ export function ChatScreen({ onBrowseDealers }: Props) {
     const needle = query.trim().toLowerCase();
     if (!needle) return list;
     return list.filter(({ dealerId, last }) => {
-      const name = lineText(dealerId, t).toLowerCase();
+      const name = nameFor(dealerId).toLowerCase();
       const preview = (bodyText(last) || (last?.key ? t(last.key) : '')).toLowerCase();
       return name.includes(needle) || preview.includes(needle);
     });
-  }, [list, query, t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list, query, t, shop.configured, shop.thread?.shopName, shop.credential?.shopName]);
 
   if (chat.status === 'loading') {
     return (
@@ -90,10 +108,87 @@ export function ChatScreen({ onBrowseDealers }: Props) {
             <ChevronLeft className="size-5 rtl:rotate-180" aria-hidden />
           </button>
           <span className="min-w-0">
-            <span className="block truncate text-subheading">{lineText(dealerId, t)}</span>
+            <span className="block truncate text-subheading">{nameFor(dealerId)}</span>
             <span className="block text-caption text-muted-foreground">{t('chat.repliesIn')}</span>
           </span>
         </header>
+
+        {chat.live ? (
+          <div className="space-y-3 border-b border-border px-4 py-3">
+            {shop.notifications.length > 0 ? (
+              <div>
+                <p className="text-caption font-medium text-muted-foreground">
+                  {t('shop.notifications.title')}
+                </p>
+                <ul className="mt-1.5 space-y-1.5">
+                  {shop.notifications.slice(0, 3).map((notice) => (
+                    <li key={notice.id} className="rounded-md bg-muted px-3 py-2">
+                      <p className="text-body-sm font-medium">{notice.title}</p>
+                      {notice.body ? (
+                        <p className="text-caption text-muted-foreground">{notice.body}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {shop.thread && shop.thread.offers.length > 0 ? (
+              <div className="rounded-lg border border-brand/40 bg-brand-soft p-3">
+                <p className="text-body-sm font-medium">
+                  {t('shop.offer.title', { shop: nameFor(dealerId) })}
+                </p>
+                {shop.thread.offers.map((offer) => (
+                  <div key={offer.id} className="mt-2 flex items-center justify-between gap-2">
+                    <span className="text-body-sm">
+                      {offer.amount !== null
+                        ? t('shop.offer.amount', { amount: offer.amount })
+                        : (offer.note ?? '')}
+                    </span>
+                    <span className="flex gap-2">
+                      <Button
+                        size="sm"
+                        className="h-9 rounded-full"
+                        onClick={() => void shop.answerOffer(offer.id, true, null)}
+                      >
+                        {t('shop.offer.accept')}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-9 rounded-full"
+                        onClick={() => void shop.answerOffer(offer.id, false, null)}
+                      >
+                        {t('shop.offer.decline')}
+                      </Button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {/* Credit and a visit are the two things a farmer asks the shop for, and
+                both are rows in the shop's contract rather than messages. */}
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 flex-1 rounded-full"
+                onClick={() => setSheet('credit')}
+              >
+                {t('shop.request.credit')}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 flex-1 rounded-full"
+                onClick={() => setSheet('visit')}
+              >
+                {t('shop.request.visit')}
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex-1 space-y-2 overflow-y-auto px-4 py-4">
           {openMessages && openMessages.length > 0 ? (
@@ -109,7 +204,7 @@ export function ChatScreen({ onBrowseDealers }: Props) {
                     {/* A thread read aloud is otherwise a run of sentences with no
                         one attached to them. */}
                     <span className="sr-only">
-                      {mine ? t('chat.you') : lineText(dealerId, t)}:{' '}
+                      {mine ? t('chat.you') : nameFor(dealerId)}:{' '}
                     </span>
                     {message.text ?? (message.key ? t(message.key) : '')}
                   </p>
@@ -153,6 +248,8 @@ export function ChatScreen({ onBrowseDealers }: Props) {
             <Send className="size-4 rtl:rotate-180" aria-hidden />
           </Button>
         </form>
+
+        {sheet ? <ShopRequestSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
       </div>
     );
   }
@@ -166,6 +263,21 @@ export function ChatScreen({ onBrowseDealers }: Props) {
           {t('chat.offline')}
         </p>
       )}
+
+      {/* A credential the shop has revoked is not an outage: the shop replaced it.
+          Saying which is which is the difference between "try again" and "ask for
+          a new invitation". */}
+      {shop.configured && shop.status === 'expired' ? (
+        <p className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-caption text-amber-800 dark:bg-amber-500/20 dark:text-amber-100">
+          {t('shop.expired')}
+        </p>
+      ) : null}
+
+      {shop.configured && shop.status === 'error' ? (
+        <p className="mt-2 rounded-md bg-muted px-3 py-2 text-caption text-muted-foreground">
+          {shop.failure?.message ?? t('shop.failed')}
+        </p>
+      ) : null}
 
       <div className="relative mt-3.5">
         <Search
@@ -188,9 +300,16 @@ export function ChatScreen({ onBrowseDealers }: Props) {
           title={t('chat.empty.title')}
           body={t('chat.empty.body')}
           action={
-            <Button variant="outline" className="h-11 rounded-full" onClick={onBrowseDealers}>
-              {t('nav.dealers')}
-            </Button>
+            <div className="flex flex-col gap-2">
+              {shop.configured ? (
+                <Button className="h-11 rounded-full" onClick={() => setConnecting(true)}>
+                  {t('shop.connect.title')}
+                </Button>
+              ) : null}
+              <Button variant="outline" className="h-11 rounded-full" onClick={onBrowseDealers}>
+                {t('nav.dealers')}
+              </Button>
+            </div>
           }
         />
       ) : matches.length === 0 ? (
@@ -208,7 +327,7 @@ export function ChatScreen({ onBrowseDealers }: Props) {
           {matches.map(({ dealerId, last }, index) => {
             const meta = THREAD_META[dealerId];
             const unreadCount = chat.unread(dealerId);
-            const name = lineText(dealerId, t);
+            const name = nameFor(dealerId);
             const preview = last ? (bodyText(last) || (last.key ? t(last.key) : '')) : '';
             const first = index === 0;
 
@@ -267,6 +386,8 @@ export function ChatScreen({ onBrowseDealers }: Props) {
           })}
         </ul>
       )}
+
+      {connecting ? <ShopConnectSheet onClose={() => setConnecting(false)} /> : null}
     </div>
   );
 }

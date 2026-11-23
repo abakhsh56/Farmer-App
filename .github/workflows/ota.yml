@@ -37,9 +37,13 @@ jobs:
     env:
       VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
       VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-      VITE_MARKETPLACE_URL: ${{ secrets.VITE_MARKETPLACE_URL }}
-      VITE_MARKETPLACE_KEY: ${{ secrets.VITE_MARKETPLACE_KEY }}
       VITE_ANALYTICS_KEY: ${{ secrets.VITE_ANALYTICS_KEY }}
+      #
+      # The two shop projects are deliberately *not* injected here. They are chosen
+      # from `VITE_APP_ENV` by `src/services/shopEnvironments.ts`, so a staging build
+      # reads the staging shop project and a main build reads production. Supplying
+      # one project's URL from a repository secret would override that choice on all
+      # three branches and quietly point dev and staging at the live shop network.
 
     steps:
       - uses: actions/checkout@v4

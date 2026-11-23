@@ -43,6 +43,25 @@
       </array>
     </dict>
 	</dict>
+	<!--
+	     The shop's links: agrishop://join?code=XXXXXX from a sticker, and
+	     agrishop://farmer?token=… from an owner's invitation. Both are handled by
+	     the same parser, so a farmer who is invited while the app is open is
+	     connected without relaunching it.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>pk.agrishop.farmer</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>agrishop</string>
+			</array>
+		</dict>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
