@@ -58,6 +58,9 @@ npm run stack:stop      # when you are done for the day
 npm run stack:reset     # drop the database and re-apply every migration
 ```
 
+`npm run verify:environments -- --dev` then signs in with the fixed code below
+and does a document round trip against it — the same check staging gets.
+
 `stack:start` prints the local API URL and keys. They are already written into
 `.env.local`, which is git-ignored:
 
