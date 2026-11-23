@@ -213,6 +213,37 @@ That last point is why the environment table travels in the bundle: an app
 installed as staging before the split resolves the staging project after its next
 OTA update, with no reinstall.
 
+## Database automation
+
+`.github/workflows/db-sync.yml` runs on every push to the three branches:
+
+- **alignment** — every branch, read-only. `scripts/check-db-alignment.mjs`
+  requires every RPC the code calls to exist in the migration chain (or to be a
+  known AgriShop call served by a shop project), and every `VITE_*` the code
+  reads to be documented in `.env.example`. A push that calls a function nobody
+  migrated fails here, rather than at runtime on a phone.
+- **migrate** — `staging` and `main` only. `supabase db push` against that
+  branch's own project, `--dry-run` first.
+
+It is deliberately inert until the owner configures it, because a workflow that
+can alter a database should not start doing so merely because a branch was
+merged:
+
+| Where | Name | Value |
+|---|---|---|
+| Secret | `SUPABASE_ACCESS_TOKEN` | a dashboard access token |
+| Variable | `STAGING_SUPABASE_PROJECT_REF` | `zmyvkwijloqylvftvhvq` |
+| Variable | `PROD_SUPABASE_PROJECT_REF` | `swmbmtvwgksicfnfsehg` |
+
+Without them the migrate job prints a warning and applies nothing — it does not
+fail, because a missing credential is a setup step, not a broken branch.
+
+One thing to know before enabling it: both projects were built by applying
+`supabase/apply-all.sql`, not by the CLI, so their
+`supabase_migrations.schema_migrations` table has been stamped with the 72
+versions the chain already contains. That is what makes the first `db push` a
+no-op instead of an attempt to create 92 tables that already exist.
+
 ## What is not automatic
 
 - **Site deploys.** The three site URLs are built and published by hand
@@ -224,3 +255,18 @@ OTA update, with no reinstall.
   `farmer_api_*` functions, so a production build shows the shop and its listings
   but cannot hold a conversation. Staging works because the staging AgriShop
   project has published them.
+
+## Open items
+
+Carried over from the first pass at this separation, and still open:
+
+- **AgriShop migrations 0325–0333** exist in the shop repository but are not
+  applied to either shop project; applying them is the shop team's call.
+- **Vercel** still needs the Farmer App project re-authorised before
+  per-environment variables can be set there. The three `freebuff.site` URLs are
+  unaffected.
+- **`GEMINI_API_KEY`** behind the Urdu voice is a server-side secret set per
+  deployment. It is not a `VITE_` variable and never ships in a bundle.
+- **Rows that predate the split.** `swmbmtvwgksicfnfsehg` still holds the two
+  accounts and the documents created while every environment shared it. Nothing
+  in this setup deletes them — that is the owner's decision.
