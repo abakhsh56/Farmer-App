@@ -54,9 +54,33 @@ additional_redirect_urls = ["http://127.0.0.1:5273", "http://localhost:5273"]
 enable_confirmations = false
 
 [auth.sms]
-# Same reasoning for the phone provider: the code is shown by the app's demo
-# identities, not sent.
+# The app signs in with a phone number, so the provider has to be enabled even
+# though nothing is ever sent: the fixed codes below are what answer. Without
+# `enable_signup` GoTrue rejects the number outright with
+# "phone_provider_disabled".
+enable_signup = true
 enable_confirmations = false
+
+[auth.sms.test_otp]
+# The same two fixed codes staging uses, so signing in locally is one number and
+# one code — no SMS provider anywhere in the loop. The session this mints is a
+# real one, which is the point: the row-level policies are the real ones too.
+923001234567 = "123456"
+923001111111 = "111111"
+
+[auth.sms.twilio]
+# GoTrue will not accept a phone number at all unless an SMS provider is enabled,
+# even when the code is one of the fixed ones above and nothing is ever sent. So
+# the provider is enabled with placeholders that cannot reach Twilio: the test
+# codes answer first, and any other number fails here rather than texting a
+# stranger — this machine has no SMS account, by design.
+enabled = true
+account_sid = "local-development-placeholder"
+message_service_sid = "local-development-placeholder"
+# `env(...)` is the CLI's variable substitution; unset, the placeholder below is
+# what GoTrue sees.
+auth_token = "local-development-placeholder"
+
 
 [functions.notify-shop-owner]
 # The function is called by a database trigger, not by a signed-in user, and it
