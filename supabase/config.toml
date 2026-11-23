@@ -1,10 +1,62 @@
 # Supabase CLI configuration.
 #
-# One project backs every environment (dev, staging, production all read the same
-# credentials — see docs/ENVIRONMENTS.md), so this is the project id the CLI
-# targets when it is run from the repository root.
+# Three databases, one per environment, and this file is about the *first* one:
+# the local stack a developer runs on their own machine.
+#
+#   dev         this file — Docker on the laptop, started with `npm run stack:start`
+#   staging     project zmyvkwijloqylvftvhvq
+#   production  project swmbmtvwgksicfnfsehg
+#
+# The cloud projects are addressed with `--project-ref`, never by editing
+# `project_id` here: a `project_id` that names a cloud project is how a local
+# command turns into a production command. This one is the local stack's name.
+#
+# Ports are deliberately not the CLI defaults. Another Supabase project already
+# runs on 54321–54327 on this machine, and two stacks cannot share a port; a
+# clash fails the start with "port is already allocated", which reads like a
+# Docker problem rather than a numbering one.
+project_id = "farmer-app"
 
-project_id = "swmbmtvwgksicfnfsehg"
+[api]
+# 54421 rather than 54321 — see the note above.
+port = 54421
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54422
+shadow_port = 54420
+major_version = 17
+
+[studio]
+port = 54423
+
+[inbucket]
+# Where the local stack delivers email. The app never needs it (sign-in is by
+# phone), but a magic link or a password reset is testable without a provider.
+port = 54424
+smtp_port = 54425
+pop3_port = 54426
+
+[analytics]
+port = 54427
+
+[auth]
+# The dev server the app runs on, so a confirmation link lands back in the app
+# instead of on a page that does not exist.
+site_url = "http://127.0.0.1:5273"
+additional_redirect_urls = ["http://127.0.0.1:5273", "http://localhost:5273"]
+
+[auth.email]
+# No mail provider locally, so a confirmation link can never be delivered; the
+# account is confirmed on sign-up instead.
+enable_confirmations = false
+
+[auth.sms]
+# Same reasoning for the phone provider: the code is shown by the app's demo
+# identities, not sent.
+enable_confirmations = false
 
 [functions.notify-shop-owner]
 # The function is called by a database trigger, not by a signed-in user, and it
