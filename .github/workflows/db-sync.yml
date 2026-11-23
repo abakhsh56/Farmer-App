@@ -1,0 +1,87 @@
+# Database sync: keep each environment's database aligned with the code
+# that runs against it.
+#
+# - Alignment check runs on every push to development/staging/main. Every
+#   RPC the code calls must exist in supabase/migrations (or be a known
+#   remote AgriShop call), and every VITE_* variable the code reads must
+#   be documented in .env.example.
+# - Migration apply runs only on staging/main pushes, and only when the
+#   Supabase access token secret exists. It applies the repo's migration
+#   chain to THAT environment's project (staging -> staging project,
+#   main -> production project). Development has no cloud project (local
+#   only), so nothing is applied for it.
+# - The job skips loudly rather than failing when secrets are missing, so
+#   this workflow is safe to land before the new staging project exists.
+# - Nothing here touches the AgriShop projects. Those live in a separate
+#   repo with their own migration flow.
+# - No APK is built here. APKs are generated once manually when AB asks
+#   for a fresh one; updates reach installed APKs via OTA only.
+
+name: DB sync
+
+on:
+  push:
+    branches: [development, staging, main]
+    paths:
+      - 'supabase/migrations/**'
+      - 'src/**'
+      - 'scripts/check-db-alignment.mjs'
+      - '.github/workflows/db-sync.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-sync-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  alignment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - run: node scripts/check-db-alignment.mjs
+
+  migrate:
+    needs: alignment
+    if: github.ref_name == 'staging' || github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target project
+        id: target
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "project_ref=${{ vars.PROD_SUPABASE_PROJECT_REF }}" >> "$GITHUB_OUTPUT"
+            echo "env_name=production" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_ref=${{ vars.STAGING_SUPABASE_PROJECT_REF }}" >> "$GITHUB_OUTPUT"
+            echo "env_name=staging" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip when the database is not configured yet
+        if: env.SUPABASE_ACCESS_TOKEN == '' || steps.target.outputs.project_ref == ''
+        run: |
+          echo "::warning::SUPABASE_ACCESS_TOKEN or the ${{ steps.target.outputs.env_name }} project ref is not set, so no migrations were applied."
+          echo "Set the secret and the Actions variable, then re-run this workflow."
+
+      - uses: supabase/setup-cli@v1
+        if: env.SUPABASE_ACCESS_TOKEN != '' && steps.target.outputs.project_ref != ''
+
+      - name: Show what would change, then apply it
+        if: env.SUPABASE_ACCESS_TOKEN != '' && steps.target.outputs.project_ref != ''
+        env:
+          SUPABASE_PROJECT_REF: ${{ steps.target.outputs.project_ref }}
+        run: |
+          supabase link --project-ref "$SUPABASE_PROJECT_REF"
+          supabase db push --dry-run
+          supabase db push
