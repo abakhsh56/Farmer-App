@@ -8,11 +8,11 @@
 #   staging      →  ota-staging
 #   main         →  ota-production
 #
-# The build needs the same client values the environment runs with, so the five
-# VITE_ variables are read from repository secrets (Settings → Secrets and
-# variables → Actions). If they are absent the publish is skipped rather than
-# shipping a bundle with an empty backend configuration — the installed app keeps
-# the bundle it already has, which is the safe outcome.
+# The backend each branch talks to is chosen from `VITE_APP_ENV` by
+# `src/services/appEnvironments.ts`, exactly like the shop project — so the only
+# value still supplied here is the analytics key. Nothing per-environment goes in
+# a repository secret: a single `VITE_SUPABASE_URL` secret would be read by all
+# three branches, which is the arrangement this split exists to end.
 #
 # The three APKs embed the same five values at build time; this workflow only
 # replaces the web layer, so a plugin or permission change still needs a new APK.
@@ -35,8 +35,6 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       VITE_ANALYTICS_KEY: ${{ secrets.VITE_ANALYTICS_KEY }}
       #
       # The two shop projects are deliberately *not* injected here. They are chosen
@@ -65,15 +63,7 @@ jobs:
             *) echo "Unknown branch ${{ github.ref_name }}"; exit 1 ;;
           esac
 
-      - name: Refuse to publish an unconfigured bundle
-        if: env.VITE_SUPABASE_URL == ''
-        run: |
-          echo "::warning::VITE_* secrets are not set, so the ${{ steps.channel.outputs.env }} bundle was not published."
-          echo "Nothing was uploaded; installed apps keep their current bundle."
-          exit 0
-
       - name: Build, pack and publish
-        if: env.VITE_SUPABASE_URL != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

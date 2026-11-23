@@ -1,130 +1,226 @@
 # Environments
 
-Three branches, three sites, three update channels. A farmer installs one build;
-it listens to exactly one channel for the rest of its life.
+Three environments, three databases, three branches, three site URLs, three
+update channels. A farmer installs one build and it stays on its own environment
+for the rest of its life.
 
-| | Branch | Site | OTA channel | App |
-|---|---|---|---|---|
-| **Development** | `development` | https://farmer-app-dev-97xtwn.freebuff.site | `ota-dev` | Farmer Dev (`pk.agrishop.farmer.dev`) |
-| **Staging** | `staging` | https://farmer-app-staging-i1iih6.freebuff.site | `ota-staging` | Farmer Staging (`pk.agrishop.farmer.staging`) |
-| **Production** | `main` | https://farmer-app-production-8sc6a2.freebuff.site | `ota-production` | Farmer (`pk.agrishop.farmer`) |
+| | Branch | Site | OTA channel | App | Database |
+|---|---|---|---|---|---|
+| **Development** | `development` | https://farmer-app-dev-97xtwn.freebuff.site | `ota-dev` | Farmer Dev (`pk.agrishop.farmer.dev`) | this machine (Docker) |
+| **Staging** | `staging` | https://farmer-app-staging-i1iih6.freebuff.site | `ota-staging` | Farmer Staging (`pk.agrishop.farmer.staging`) | `zmyvkwijloqylvftvhvq` |
+| **Production** | `main` | https://farmer-app-production-8sc6a2.freebuff.site | `ota-production` | Farmer (`pk.agrishop.farmer`) | `swmbmtvwgksicfnfsehg` |
 
 The three Android packages are separate ids, so all three install side by side on
 one phone and a tester never has to uninstall the app to try the next one.
 
-## What happens on a push
+## Which database each build reads
 
-Pushing to any of the three branches starts two workflows:
+The choice is made in **one place**, `src/services/appEnvironments.ts`, keyed by
+`VITE_APP_ENV` — the same value that names the OTA channel, the APK flavour and
+the AgriShop project the shop and chat are read from. Nothing else in the code
+knows an environment by name.
+
+| `VITE_APP_ENV` | Backend | Where the credentials come from |
+|---|---|---|
+| `dev` | the developer's own machine | `VITE_SUPABASE_*` in `.env.local` |
+| `staging` | staging project | the table in `appEnvironments.ts` |
+| `production` | production project | the table in `appEnvironments.ts` |
+| `test` | none | nothing — the suite must never reach a database |
+| *(unset)* | none | nothing — an unlabelled build must not pick a live database |
+
+Two rules are worth stating, because they are what make three environments safe
+rather than merely different:
+
+- **The table wins for staging and production, whatever is in `.env.local`.** A
+  developer's `.env.local` points at their local stack. If an explicit
+  `VITE_SUPABASE_*` could override the table, a staging build made on that
+  laptop would talk to a localhost database, and a production build made by CI
+  (where there is no `.env.local` at all) would have no backend. Only `dev`
+  consults the environment file, because dev's backend is by definition the
+  developer's own.
+- **The committed keys are publishable keys.** They ship inside every installed
+  app by design and grant nothing on their own: every table behind them is
+  guarded by row level security that checks `auth.uid()`. The service-role key
+  and the `sb_secret_…` key are never in this repository, in a build, or on a
+  phone. They live in `.secrets/` locally and in the Supabase dashboard
+  otherwise.
+
+## Development — on this machine
+
+Development has a real Postgres, on your own computer, in Docker. Not a cloud
+project and not a mock: the same migration chain, the same 92 tables, the same
+row-level policies, the same RPCs. That is what makes "it worked locally" mean
+something.
+
+```bash
+npm run stack:start     # first run pulls images; later runs take seconds
+npm run stack:stop      # when you are done for the day
+npm run stack:reset     # drop the database and re-apply every migration
+```
+
+`stack:start` prints the local API URL and keys. They are already written into
+`.env.local`, which is git-ignored:
+
+```
+VITE_APP_ENV=dev
+VITE_SUPABASE_URL=http://127.0.0.1:54421
+VITE_SUPABASE_ANON_KEY=<the local stack's anon key>
+```
+
+The ports are deliberately **not** the CLI defaults (`54321`–`54327`): another
+Supabase project on this machine already uses those, and two stacks cannot share
+a port. Ours are `54421` (API), `54422` (Postgres), `54423` (Studio), `54424`–
+`54426` (mail), `54427` (analytics); see `supabase/config.toml`.
+
+What that buys:
+
+- **Nothing leaves the machine.** No test row, no test farmer and no half-built
+  migration ever reaches a shared project. `npm run stack:reset` empties it.
+- **The migration chain is exercised on every reset.** A migration that cannot
+  apply to an empty database fails on your laptop, not in staging.
+- **Studio** at http://127.0.0.1:54423 for looking at the rows.
+
+With the stack down the app still opens and works from the phone's own storage —
+the document layer is built for exactly that — but screens that need the server
+say they are not syncing. Start the stack before judging a data screen.
+
+The dev APK is the one place localhost means the phone itself. Install it only
+for UI work, or run `adb reverse tcp:54421 tcp:54421` so the phone reaches the
+stack over the cable. Everything that touches data is tested on the staging
+build, which is the whole point of having one.
+
+## Staging — `zmyvkwijloqylvftvhvq`
+
+Built from the migration chain, not copied from production: `supabase/apply-all.sql`
+was applied to an empty project, which is the rehearsal that proves the chain can
+still build an environment from nothing.
+
+| | |
+|---|---|
+| Project | https://supabase.com/dashboard/project/zmyvkwijloqylvftvhvq |
+| Tables / RLS / policies | 92 / 92 / 94 — identical to the chain |
+| Edge Functions | all 10 deployed (`ai`, `otp`, `notify-shop-owner` and the six ingest functions) |
+| Secrets | `FCM_SERVICE_ACCOUNT`, `FCM_PROJECT_ID`, `SHOP_PUSH_TOKEN`, `INGEST_TOKEN` |
+| Vault | `ingestion_project_url`, `ingestion_project_ref`, `ingest_gateway_key`, `ingest_token`, `shop_push_token` |
+| Storage buckets | `scan-media`, `voice-notes`, `community`, `verification`, `report-media` |
+| Scheduled jobs | the 20 from the chain (retention, expiry, refresh, ingestion) |
+| Content | production's readings, forecasts, observations, rules and market rows — **not** its people |
+
+### Signing in on staging
+
+Staging has **no SMS provider**, so a real code cannot be delivered. Supabase has
+a supported answer for that: a fixed test OTP, scoped to that project only.
+
+```
+923001234567   code 123456
+923001111111   code 111111
+```
+
+That is configuration on the project (`sms_test_otp`), not a code path in the
+app: the app still calls `signInWithOtp` and `verifyOtp`, and the session it gets
+back is a real one, so every row-level policy applies exactly as it does in
+production. Production does not carry the second number, and neither project
+carries a test OTP for any other number.
+
+## Production — `swmbmtvwgksicfnfsehg`
+
+The project every installed production app already talks to, which is why
+splitting the environments needed no data migration and no reinstall.
+
+| | |
+|---|---|
+| Project | https://supabase.com/dashboard/project/swmbmtvwgksicfnfsehg |
+| Region | `ap-southeast-1` |
+| Auth | phone + email, `sms_test_otp` for `923001234567` only |
+
+It carries a **legacy community block** that this client never calls: 17 tables
+(`community_*`, `dealer_messages`) and 46 functions (`community_*`,
+`dealer_send_message`) from the design before community content moved into
+`client_documents`. The app's remote surface — `client_document_*` plus the RPCs
+listed in `src/services/**` — is present in the chain, and the chain is what new
+environments are built from. Staging therefore does not have that block: it has
+the surface the client actually uses.
+
+That is a deliberate difference, not drift to be copied. The follow-up, when the
+shop team touch that area, is one migration that either owns those objects or
+drops them from production — not a copy into every new environment.
+
+## What is never copied between environments
+
+- **People.** `auth.users`, `parties`, `client_documents`, `device_push_tokens`
+  and `audit_log` are per-environment. A staging database carrying production's
+  users is a second copy of personal data with weaker protection.
+- **Push registrations.** A token belongs to one install of one app id; copying
+  it would send one environment's notification to another environment's phone.
+- **Secrets.** Each project has its own Edge Function secrets and its own Vault.
+  The values are the same where they *are* the same thing (`SHOP_PUSH_TOKEN` is
+  one shared secret between the trigger and the function, inside one project),
+  and different where the thing is different (the ingestion project URL, the
+  gateway key, the ingest token).
+
+## Promotion
+
+```
+development ──merge──▶ staging ──merge──▶ main
+     │                    │                  │
+   ota-dev            ota-staging       ota-production
+```
+
+Nothing promotes by itself. A commit on `development` stays off staging until it
+is merged, and each merge is what republishes that environment's OTA bundle. The
+sequence, and what proves each step:
+
+1. **On `development`** — `npm run check:fast` (type check, design conformance,
+   unit tests) against the local stack. Nothing leaves the machine.
+2. **Merge into `staging`** — CI runs the full suite, the migration chain lint,
+   the Edge Function contracts, the recovery drill and the load check; the merge
+   publishes `ota-staging`; the staging APK picks it up on next launch.
+3. **Verify on staging** — `npm run verify:environments -- --staging` signs in as
+   a farmer and does a document round trip, including a second farmer who must be
+   refused. This is the check that a release actually works against a real
+   database.
+4. **Merge into `main`** — the same gates, then `ota-production`. Production
+   phones update themselves.
+
+## What happens on a push
 
 - **CI** (`.github/workflows/ci.yml`) — type check, design conformance, migration
   chain, Edge Function contracts, the full test suite, a production build, the
-  backup/restore drill and the bounded-load check. It runs on `main` and on pull
-  requests; the scheduled run additionally asks the live vendors.
+  backup/restore drill and the bounded-load check. Runs on `main` and on pull
+  requests.
 - **OTA bundle** (`.github/workflows/ota.yml`) — builds the web layer for that
-  branch's environment, packs it, and publishes it to the matching release tag.
-  An installed app on that channel picks it up on its next launch. The bundle is
-  ~0.9 MB because it is the web layer only, not the model or the shell.
+  branch's environment, packs it and publishes it to the matching release tag.
+  An installed app on that channel picks it up on its next launch.
 
-Client values (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
-`VITE_ANALYTICS_KEY`) live in repository secrets, so a workflow run never needs a
-developer's machine. Without them the publish step refuses to run and says so,
-rather than shipping a bundle with an empty backend.
+The OTA workflow needs **no Supabase secret**. The backend is chosen from
+`VITE_APP_ENV` by the table, so a bundle carries the right project because it was
+built for that branch — not because CI was told which URL to use. The one secret
+it still reads is the analytics key.
 
-## Which shop project each environment talks to
+## Installing and updating
 
-The shop network is a **different Supabase project per environment**, and the
-choice is made by `VITE_APP_ENV` in `src/services/shopEnvironments.ts` — the same
-value that names the OTA channel and the APK flavour. Both projects are read with
-their own publishable anon key; row level security is what protects the data, and
-the service_role key is never in a build.
+- **First install** is an APK: `npm run apk:dev`, `apk:staging`, `apk:production`.
+  Each is a separate package id, so all three live side by side.
+- **Every update after that is OTA.** The installed app polls its channel's
+  `latest.json` on launch, downloads the bundle only when the id differs, verifies
+  the checksum and reloads. Nothing is reinstalled, and a failed download leaves
+  the bundle inside the APK running.
+- **What OTA cannot change** is the native shell: a new plugin, a permission or a
+  launcher change still needs an APK. The web layer — screens, logic,
+  configuration, *including which database to talk to* — does not.
 
-| | AgriShop project | `farmer_api_*` contract |
-|---|---|---|
-| **Development** | staging (`bpybjrjenwccowvtrevu`) | published |
-| **Staging** | staging (`bpybjrjenwccowvtrevu`) | published |
-| **Production** | production (`gkswcfljxlutkfdvvqng`) | **not yet published** |
+That last point is why the environment table travels in the bundle: an app
+installed as staging before the split resolves the staging project after its next
+OTA update, with no reinstall.
 
-That last cell is the reason ChaT is not live in production: the production shop
-project answers `PGRST202` for every `farmer_api_*` call, which the client reports
-as "the shop backend has not published this call". The staging project answers
-`NOT_AUTHORIZED: a farmer token is required`, which is the contract working. Until
-the shop team deploys the same functions to production, a production build can
-show the shop and its listings but cannot hold a conversation with it.
+## What is not automatic
 
-## What is *not* automatic yet
-
-- **Site deploys.** The three site URLs are built and published by hand today
-  (`VITE_APP_ENV=<env> VITE_OTA_BASE=<channel> npx vite build --outDir dist-<env>`,
-  then the deploy manifest in `web/`). Automating this in CI needs a deploy token
-  for the hosting account as a fourth secret; until then a site is one command
-  behind the branch.
-- **One backend for the app's own data.** All three environments still point at
-  the same Supabase project for sessions, crops, weather and the rest, because
-  there is one set of credentials for it. The shop network is the opposite: it is
-  already split per environment (see above), which is why a staging message can
-  never reach a live shop.
-- **Promotion is a merge.** `development` → `staging` → `main` is carried by
-  merging the branch into the next one, so each environment's OTA channel
-  republishes from that environment's commit. Nothing promotes automatically: a
-  commit on `development` stays off staging until it is merged.
-
-## iOS
-
-The iOS project exists (`ios/`, Capacitor 8, purpose strings in `Info.plist`) and
-builds the same web assets as Android, but it can only be compiled on macOS with
-Xcode, and an App Store or TestFlight build needs an Apple Developer account and a
-provisioning profile. Until then the installable iOS path is the PWA: open the
-environment URL in Safari and *Share → Add to Home Screen*.
-
-## Push notifications
-
-Configured and deployed. The chain, end to end:
-
-  1. The owner taps *Enable notifications* on their shop card, which asks for the
-     permission at the moment the reason is on screen and calls
-     `register_push_token` (`src/services/push.ts`).
-  2. `device_push_tokens` keeps one row per device — a counter phone and a
-     personal one are two rows, and registering the same install twice updates
-     its row instead of duplicating the notifications.
-  3. A farmer scanning the shop's QR inserts a `dealer_farmer_links` row with
-     `established_by = 'shop_qr'`, and the trigger `dealer_farmer_links_notify_shop`
-     queues a `net.http_post` to the function. It is asynchronous on purpose: a
-     delivery failure loses a notification, never the farmer's join.
-  4. `supabase/functions/notify-shop-owner` signs a service-account JWT with
-     WebCrypto, exchanges it for an FCM access token, and sends over FCM HTTP v1.
-     Tokens FCM reports as gone are deleted, so an uninstalled phone is not retried
-     forever.
-
-Project state (applied, not a to-do):
-
-- Supabase secrets `FCM_SERVICE_ACCOUNT` and `FCM_PROJECT_ID` (`farmer-app-c4590`),
-  and `SHOP_PUSH_TOKEN`, the shared secret the trigger presents as its caller proof.
-  It is a purpose-made token rather than the service-role key: one caller does not
-  need the key that opens every table.
-- The same token in Vault as `shop_push_token`, which the trigger reads. It lives in
-  Vault, not in the migration, because a key in version control is a published key.
-  Without it the trigger logs a warning and the join still commits.
-- `supabase/config.toml` turns the gateway's JWT check off for this one function
-  (`verify_jwt = false`), because a database trigger has no JWT to present; the
-  function's own token check is the door, and a caller without the token gets 403.
-- `android/app/google-services.json` for `pk.agrishop.farmer`, the production
-  flavour. The `.dev` and `.staging` ids have no Firebase client and their services
-  tasks stay switched off, so those builds register for nothing.
-
-The Firebase project is **`farmer-app-c4590`**
-(<https://console.firebase.google.com/project/farmer-app-c4590>), Android package
-`pk.agrishop.farmer`. Its two credentials are kept out of git and never printed:
-
-| What | Where it lives | Used by |
-| --- | --- | --- |
-| Service-account key | `.secrets/firebase-service-account.json` (git-ignored) | uploaded as the `FCM_SERVICE_ACCOUNT` secret; never read by the app |
-| Shared caller token | `.secrets/shop-push-token.txt` (git-ignored) | the `SHOP_PUSH_TOKEN` secret and the Vault secret `shop_push_token` |
-
-Both are git-ignored and both survive in those three places, so nothing has to be
-asked for again. Rotating either is: write the new value to the file, re-run the
-secret upload, and update Vault — no code change.
-
-What is still missing, and it is Apple's to give: iOS delivery needs an APNs
-`.p8` key uploaded to the same Firebase project, which needs an Apple Developer
-account. Until then the iOS build can request permission and register a token, but
-FCM cannot reach it.
+- **Site deploys.** The three site URLs are built and published by hand
+  (`VITE_APP_ENV=<env> npx vite build --outDir dist-<env>`, then the manifest in
+  `web/`). Automating it needs a hosting deploy token as a repository secret.
+- **iOS.** The project exists and builds the same web assets, but it needs macOS,
+  Xcode and an Apple Developer account. Until then the iOS path is the PWA.
+- **Production chat.** The production AgriShop project has not published the
+  `farmer_api_*` functions, so a production build shows the shop and its listings
+  but cannot hold a conversation. Staging works because the staging AgriShop
+  project has published them.
