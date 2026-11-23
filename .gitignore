@@ -68,3 +68,6 @@ screenshots/gallery.html
 dist-dev/
 dist-staging/
 dist-production/
+
+# The local stack writes its own branch/port bookkeeping here.
+supabase/.branches/
