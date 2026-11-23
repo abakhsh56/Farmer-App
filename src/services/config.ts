@@ -35,6 +35,7 @@
  * "which provider is running", which the diagnostics panel needs.
  */
 import { demoAuth } from './demoAuth';
+import { resolveAppBackend } from './appEnvironments';
 import { resolveShopEnvironment } from './shopEnvironments';
 
 /**
@@ -139,8 +140,27 @@ function read(key: BuildEnvKey): string | null {
 }
 
 function build(): ServiceConfig {
-  const supabaseUrl = read('VITE_SUPABASE_URL');
-  const supabaseAnonKey = read('VITE_SUPABASE_ANON_KEY');
+  /*
+   * Which project this build belongs to is decided by `VITE_APP_ENV`, not by
+   * whatever happens to be in the build environment.
+   *
+   * This is the same rule the shop network already follows, and it is the rule
+   * that makes three environments possible at all: a staging build made on a
+   * developer's machine must read staging even though that machine's `.env.local`
+   * points at a local stack, and a production build must read production even
+   * when it is built by CI, where no `.env.local` exists. `dev` is the one
+   * environment that does read `VITE_SUPABASE_*`, because dev's backend is the
+   * developer's own machine by definition.
+   *
+   * `local` means no backend: the on-device repository, the fixture weather and
+   * the development sign-in. That is what an unlabelled build gets, so a build
+   * nobody labelled can never start writing into a live database.
+   */
+  const appBackend = resolveAppBackend(read('VITE_APP_ENV'));
+  const supabaseUrl =
+    appBackend.source === 'environment' ? appBackend.backend.url : appBackend.source === 'configured' ? read('VITE_SUPABASE_URL') : null;
+  const supabaseAnonKey =
+    appBackend.source === 'environment' ? appBackend.backend.key : appBackend.source === 'configured' ? read('VITE_SUPABASE_ANON_KEY') : null;
   /*
    * The shop network is a different project per environment, so its addresses are
    * resolved from `VITE_APP_ENV` first and from an explicit variable second. The
