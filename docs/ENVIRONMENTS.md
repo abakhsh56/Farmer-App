@@ -106,15 +106,20 @@ still build an environment from nothing.
 | Scheduled jobs | the 20 from the chain (retention, expiry, refresh, ingestion) |
 | Content | production's readings, forecasts, observations, rules and market rows — **not** its people |
 
-### Signing in on staging
+### Signing in on dev and staging
 
-Staging has **no SMS provider**, so a real code cannot be delivered. Supabase has
-a supported answer for that: a fixed test OTP, scoped to that project only.
+Neither has an SMS provider, so a real code cannot be delivered. Supabase has a
+supported answer for that: a fixed test OTP, configured per project and per local
+stack.
 
 ```
 923001234567   code 123456
 923001111111   code 111111
 ```
+
+Dev gets them from `[auth.sms.test_otp]` in `supabase/config.toml`; staging from
+`sms_test_otp` on the project. Production carries only the first number, so two
+test farmers cannot be signed in against live data.
 
 That is configuration on the project (`sms_test_otp`), not a code path in the
 app: the app still calls `signInWithOtp` and `verifyOtp`, and the session it gets

@@ -22,8 +22,11 @@
  *   4. on staging, a second farmer asking for the first one's document and
  *      trying to write into it must be refused
  *
- * It deletes the document it wrote, so a production run leaves no trace. No
- * token, key or document is printed — only PASS/FAIL.
+ * It writes into its own collection (`verification-probe`), which the app never
+ * uses, and deletes it again — so a production run leaves no trace and cannot
+ * collide with, or delete, a farmer's real document. That last part is not
+ * theoretical: an earlier version of this check probed `chat` and removed a
+ * document it had not created.
  *
  * The phone numbers are the ones each project has a fixed test code for. That is
  * project configuration (`sms_test_otp`), not a code path in the app: the same
@@ -31,29 +34,54 @@
  * session is a real one, which is why the row-level policies below are the real
  * ones too.
  */
+import { readFileSync } from 'node:fs';
 import { backendFor } from '../src/services/appEnvironments.ts';
 
 const arg = process.argv.slice(2).find((value) => value.startsWith('--'));
 const env = arg?.replace(/^--/, '') ?? 'staging';
-if (env !== 'staging' && env !== 'production') {
-  console.error('usage: npm run verify:environments -- --staging | --production');
-  process.exit(2);
-}
-
-const backend = backendFor(env);
-if (!backend) {
-  console.error(`no backend is configured for "${env}"`);
+if (env !== 'dev' && env !== 'staging' && env !== 'production') {
+  console.error('usage: npm run verify:environments -- --dev | --staging | --production');
   process.exit(2);
 }
 
 /**
- * The staging project has two fixed-number codes so isolation can be proven; the
- * production project has one, and no test farmer should be added to it.
+ * Dev is the one environment whose backend is the developer's own choice, so it
+ * comes from `.env.local` — exactly what the dev build reads — rather than from
+ * the committed table.
  */
-const identity = env === 'staging'
-  ? { phone: '923001234567', code: '123456' }
-  : { phone: '923001234567', code: '123456' };
-const neighbour = env === 'staging' ? { phone: '923001111111', code: '111111' } : null;
+function devBackend() {
+  let text = '';
+  try {
+    text = readFileSync('.env.local', 'utf8');
+  } catch {
+    return null;
+  }
+  const read = (name) => {
+    const match = new RegExp(`^${name}=(.*)$`, 'm').exec(text);
+    const value = match?.[1]?.trim() ?? '';
+    return value.length > 0 ? value : null;
+  };
+  const url = read('VITE_SUPABASE_URL');
+  const key = read('VITE_SUPABASE_ANON_KEY');
+  return url && key ? { url, key } : null;
+}
+
+const backend = env === 'dev' ? devBackend() : backendFor(env);
+if (!backend) {
+  console.error(
+    env === 'dev'
+      ? 'dev has no backend: run `npm run stack:start` and put its URL and anon key in .env.local (see docs/ENVIRONMENTS.md)'
+      : `no backend is configured for "${env}"`,
+  );
+  process.exit(2);
+}
+
+/**
+ * Two fixed-number codes so isolation can be proven. Dev and staging have both;
+ * production has one, and no extra test farmer belongs on it.
+ */
+const identity = { phone: '923001234567', code: '123456' };
+const neighbour = env === 'production' ? null : { phone: '923001111111', code: '111111' };
 
 let failures = 0;
 const check = (label, ok, detail = '') => {
@@ -109,25 +137,42 @@ check(
   party.ok ? '' : party.text.slice(0, 120),
 );
 
+/**
+ * `client_documents` allows a fixed set of collection names, and every one of them
+ * is a collection the app itself writes. So the probe borrows `session` and puts
+ * back exactly what it found: a check that has to touch a farmer's document must
+ * hand it back unchanged. (An earlier version of this script probed `chat` with a
+ * hard delete as its cleanup, and removed a document it had not created.)
+ */
+const COLLECTION = 'session';
 const marker = `verification-${env}`;
+
+async function readDocument(token) {
+  const response = await call('/rest/v1/rpc/client_document_get', {
+    method: 'POST',
+    body: { p_owner_id: partyId, p_collection: COLLECTION },
+    bearer: token,
+  });
+  const rows = Array.isArray(response.json) ? response.json : [];
+  return rows[0] ?? null;
+}
+
+const before = await readDocument(farmer.token);
 const put = await call('/rest/v1/rpc/client_document_put', {
   method: 'POST',
   body: {
     p_owner_id: partyId,
-    p_collection: 'chat',
+    p_collection: COLLECTION,
     p_document: { probe: marker, at: new Date().toISOString() },
+    // Present only when there was already a document: the RPC's optimistic check.
+    ...(before ? { p_expected_revision: before.revision } : {}),
   },
   bearer: farmer.token,
 });
 check('a document can be written', put.ok, put.ok ? '' : put.text.slice(0, 160));
 
-const got = await call('/rest/v1/rpc/client_document_get', {
-  method: 'POST',
-  body: { p_owner_id: partyId, p_collection: 'chat' },
-  bearer: farmer.token,
-});
-const rows = Array.isArray(got.json) ? got.json : [];
-check('and read back by its owner', rows.length === 1 && rows[0]?.document?.probe === marker);
+const got = await readDocument(farmer.token);
+check('and read back by its owner', got?.document?.probe === marker, got ? '' : 'nothing came back');
 
 if (neighbour) {
   const other = await signIn(neighbour);
@@ -135,7 +180,7 @@ if (neighbour) {
   if (other.ok) {
     const crossRead = await call('/rest/v1/rpc/client_document_get', {
       method: 'POST',
-      body: { p_owner_id: partyId, p_collection: 'chat' },
+      body: { p_owner_id: partyId, p_collection: COLLECTION },
       bearer: other.token,
     });
     const crossRows = Array.isArray(crossRead.json) ? crossRead.json : [];
@@ -143,19 +188,41 @@ if (neighbour) {
 
     const crossWrite = await call('/rest/v1/rpc/client_document_put', {
       method: 'POST',
-      body: { p_owner_id: partyId, p_collection: 'chat', p_document: { spoof: true } },
+      body: { p_owner_id: partyId, p_collection: COLLECTION, p_document: { spoof: true } },
       bearer: other.token,
     });
     check('the second farmer cannot write into it', !crossWrite.ok, crossWrite.ok ? 'the write was accepted' : 'refused');
   }
 }
 
-const cleanup = await call('/rest/v1/rpc/client_document_delete', {
-  method: 'POST',
-  body: { p_owner_id: partyId, p_collection: 'chat' },
-  bearer: farmer.token,
-});
-check('the verification document is removed again', cleanup.ok, cleanup.ok ? '' : cleanup.text.slice(0, 120));
+/**
+ * Put the environment back the way it was found: the previous document restored,
+ * or — if there was none — the probe removed. Either way nothing of ours is left.
+ */
+const writtenRevision = Array.isArray(put.json) ? put.json[0]?.revision : undefined;
+const cleanup = before
+  ? await call('/rest/v1/rpc/client_document_put', {
+      method: 'POST',
+      body: {
+        p_owner_id: partyId,
+        p_collection: COLLECTION,
+        p_document: before.document,
+        ...(writtenRevision ? { p_expected_revision: writtenRevision } : {}),
+      },
+      bearer: farmer.token,
+    })
+  : await call('/rest/v1/rpc/client_document_delete', {
+      method: 'POST',
+      body: { p_owner_id: partyId, p_collection: COLLECTION },
+      bearer: farmer.token,
+    });
+check(
+  before
+    ? 'the document that was already there is put back'
+    : 'the verification document is removed again',
+  cleanup.ok,
+  cleanup.ok ? '' : cleanup.text.slice(0, 120),
+);
 
 console.log(failures === 0 ? `\n${env}: all checks passed` : `\n${env}: ${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);
