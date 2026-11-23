@@ -26,9 +26,30 @@ Pushing to any of the three branches starts two workflows:
   ~0.9 MB because it is the web layer only, not the model or the shell.
 
 Client values (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
-`VITE_MARKETPLACE_URL`, `VITE_MARKETPLACE_KEY`) live in repository secrets, so a
-workflow run never needs a developer's machine. Without them the publish step
-refuses to run and says so, rather than shipping a bundle with an empty backend.
+`VITE_ANALYTICS_KEY`) live in repository secrets, so a workflow run never needs a
+developer's machine. Without them the publish step refuses to run and says so,
+rather than shipping a bundle with an empty backend.
+
+## Which shop project each environment talks to
+
+The shop network is a **different Supabase project per environment**, and the
+choice is made by `VITE_APP_ENV` in `src/services/shopEnvironments.ts` — the same
+value that names the OTA channel and the APK flavour. Both projects are read with
+their own publishable anon key; row level security is what protects the data, and
+the service_role key is never in a build.
+
+| | AgriShop project | `farmer_api_*` contract |
+|---|---|---|
+| **Development** | staging (`bpybjrjenwccowvtrevu`) | published |
+| **Staging** | staging (`bpybjrjenwccowvtrevu`) | published |
+| **Production** | production (`gkswcfljxlutkfdvvqng`) | **not yet published** |
+
+That last cell is the reason ChaT is not live in production: the production shop
+project answers `PGRST202` for every `farmer_api_*` call, which the client reports
+as "the shop backend has not published this call". The staging project answers
+`NOT_AUTHORIZED: a farmer token is required`, which is the contract working. Until
+the shop team deploys the same functions to production, a production build can
+show the shop and its listings but cannot hold a conversation with it.
 
 ## What is *not* automatic yet
 
@@ -37,10 +58,15 @@ refuses to run and says so, rather than shipping a bundle with an empty backend.
   then the deploy manifest in `web/`). Automating this in CI needs a deploy token
   for the hosting account as a fourth secret; until then a site is one command
   behind the branch.
-- **One backend.** All three environments point at the same Supabase project and
-  the same marketplace, because there is one set of credentials. Separating them
-  is a Supabase project per environment and one more secret each — the code
-  already reads them per environment, so it is configuration, not a code change.
+- **One backend for the app's own data.** All three environments still point at
+  the same Supabase project for sessions, crops, weather and the rest, because
+  there is one set of credentials for it. The shop network is the opposite: it is
+  already split per environment (see above), which is why a staging message can
+  never reach a live shop.
+- **Promotion is a merge.** `development` → `staging` → `main` is carried by
+  merging the branch into the next one, so each environment's OTA channel
+  republishes from that environment's commit. Nothing promotes automatically: a
+  commit on `development` stays off staging until it is merged.
 
 ## iOS
 

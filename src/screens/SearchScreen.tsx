@@ -64,9 +64,18 @@ function useSettled<T>(value: T, ms: number): T {
 export function SearchScreen({
   onBack,
   onOpenChat,
+  onOpenDealer,
+  onOpenProduct,
 }: {
   onBack: () => void;
   onOpenChat: (dealerId: string) => void;
+  /*
+   * The same two pages the Shop tab opens. Search shows the same shops and the
+   * same listings, so a row here must do what the identical row does there —
+   * otherwise the answer a farmer found is only a conversation about the answer.
+   */
+  onOpenDealer: (dealerId: string) => void;
+  onOpenProduct: (target: { canonicalProductId: string; dealerId: string | null }) => void;
 }) {
   const { t, locale } = useLocale();
   const location = useLocation();
@@ -283,7 +292,13 @@ export function SearchScreen({
                     key={entry.id}
                     className="flex items-center justify-between gap-3 rounded-md border border-border bg-card p-3"
                   >
-                    <span className="min-w-0">
+                    {/* The row body opens the shop's page; the chat button
+                        stays its own control, so a tap on either does one thing. */}
+                    <button
+                      type="button"
+                      onClick={() => onOpenDealer(entry.id)}
+                      className="min-w-0 flex-1 text-start"
+                    >
                       <span className="block truncate text-body font-medium">
                         {dealerLabel(entry.id, entry.name)}
                       </span>
@@ -299,7 +314,7 @@ export function SearchScreen({
                           })}
                         </span>
                       ) : null}
-                    </span>
+                    </button>
                     <ChatButton
                       label={t('dealers.chatAria', { name: dealerLabel(entry.id, entry.name) })}
                       onClick={() => onOpenChat(entry.id)}
@@ -316,6 +331,7 @@ export function SearchScreen({
               sourceLabel={products.sourced?.sourceLabel ?? null}
               dealerLabel={dealerLabel}
               onOpenChat={onOpenChat}
+              onOpenProduct={onOpenProduct}
             />
           )}
         </>
@@ -385,6 +401,7 @@ function ProductResults({
   sourceLabel,
   dealerLabel,
   onOpenChat,
+  onOpenProduct,
 }: {
   hits: readonly ProductHit[];
   loading: boolean;
@@ -392,6 +409,7 @@ function ProductResults({
   sourceLabel: string | null;
   dealerLabel: (id: string, fallback: string) => string;
   onOpenChat: (dealerId: string) => void;
+  onOpenProduct: (target: { canonicalProductId: string; dealerId: string | null }) => void;
 }) {
   const { t, locale } = useLocale();
 
@@ -415,7 +433,20 @@ function ProductResults({
             key={`${hit.dealerId}-${hit.product.id}`}
             className="flex items-start justify-between gap-3 rounded-md border border-border bg-card p-3"
           >
-            <span className="min-w-0">
+            {/* The listing opens the product's own page — the one the Shop
+                shelf opens — so the comparison continues from the results the
+                farmer searched rather than starting over from a shelf. */}
+            <button
+              type="button"
+              disabled={hit.product.canonicalProductId === null}
+              onClick={() =>
+                onOpenProduct({
+                  canonicalProductId: hit.product.canonicalProductId as string,
+                  dealerId: hit.dealerId,
+                })
+              }
+              className="min-w-0 flex-1 text-start"
+            >
               <span className="block truncate text-body font-medium">{hit.product.name}</span>
               <span className="mt-0.5 block truncate text-caption text-muted-foreground">
                 {hit.product.brand ? `${hit.product.brand} · ` : ''}
@@ -436,7 +467,7 @@ function ProductResults({
                   km: t('common.km', { km: formatNumber(hit.distanceKm, locale) }),
                 })}
               </span>
-            </span>
+            </button>
 
             <span className="flex shrink-0 flex-col items-end gap-1.5">
               {hit.product.unitPrice !== null ? (

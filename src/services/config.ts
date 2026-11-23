@@ -35,6 +35,7 @@
  * "which provider is running", which the diagnostics panel needs.
  */
 import { demoAuth } from './demoAuth';
+import { resolveShopEnvironment } from './shopEnvironments';
 
 /**
  * Where the weather numbers come from.
@@ -113,6 +114,10 @@ const BUILD_ENV = {
   VITE_MARKETPLACE_KEY: import.meta.env.VITE_MARKETPLACE_KEY,
   VITE_SHOP_API_URL: import.meta.env.VITE_SHOP_API_URL,
   VITE_SHOP_API_KEY: import.meta.env.VITE_SHOP_API_KEY,
+  // Names the environment this build is for (`dev`, `staging`, `production`).
+  // It selects which AgriShop project the shop and marketplace endpoints come
+  // from — see `shopEnvironments.ts` — as well as the OTA channel the APK follows.
+  VITE_APP_ENV: import.meta.env.VITE_APP_ENV,
   VITE_AI_ENDPOINT: import.meta.env.VITE_AI_ENDPOINT,
   VITE_OTP_ENDPOINT: import.meta.env.VITE_OTP_ENDPOINT,
   VITE_DEALER_ENDPOINT: import.meta.env.VITE_DEALER_ENDPOINT,
@@ -136,10 +141,18 @@ function read(key: BuildEnvKey): string | null {
 function build(): ServiceConfig {
   const supabaseUrl = read('VITE_SUPABASE_URL');
   const supabaseAnonKey = read('VITE_SUPABASE_ANON_KEY');
-  const marketplaceUrl = read('VITE_MARKETPLACE_URL');
-  const marketplaceKey = read('VITE_MARKETPLACE_KEY');
-  const shopApiUrl = read('VITE_SHOP_API_URL');
-  const shopApiKey = read('VITE_SHOP_API_KEY');
+  /*
+   * The shop network is a different project per environment, so its addresses are
+   * resolved from `VITE_APP_ENV` first and from an explicit variable second. The
+   * other order would be worse: every build path here already sets the environment,
+   * and only some of them are configured for shop credentials — a staging build
+   * that silently read production's listings would look like it worked.
+   */
+  const shopEnvironment = resolveShopEnvironment(read('VITE_APP_ENV'));
+  const marketplaceUrl = read('VITE_MARKETPLACE_URL') ?? shopEnvironment?.marketplace.url ?? null;
+  const marketplaceKey = read('VITE_MARKETPLACE_KEY') ?? shopEnvironment?.marketplace.key ?? null;
+  const shopApiUrl = read('VITE_SHOP_API_URL') ?? shopEnvironment?.shopApi.url ?? null;
+  const shopApiKey = read('VITE_SHOP_API_KEY') ?? shopEnvironment?.shopApi.key ?? null;
   const aiEndpoint = read('VITE_AI_ENDPOINT');
   const otpEndpoint = read('VITE_OTP_ENDPOINT');
   const dealerEndpoint = read('VITE_DEALER_ENDPOINT');

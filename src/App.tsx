@@ -331,14 +331,24 @@ function Shell() {
           two halves — a shop and a stock list — and the list could only show one
           of them.
         */}
+        {/*
+          Hidden rather than unmounted while a shop or product page sits on top:
+          the keyword, which half of the answer is showing and what is typed in
+          the box all survive the trip, so Back returns to the results that were
+          left instead of to an empty search form.
+        */}
         {view === 'search' ? (
-          <SearchScreen
-            onBack={() => setView('tabs')}
-            onOpenChat={(dealerId) => {
-              openThread(dealerId);
-              setView('tabs');
-            }}
-          />
+          <div className={detail !== null ? 'hidden' : undefined}>
+            <SearchScreen
+              onBack={() => setView('tabs')}
+              onOpenChat={(dealerId) => {
+                openThread(dealerId);
+                setView('tabs');
+              }}
+              onOpenDealer={openDealer}
+              onOpenProduct={openProduct}
+            />
+          </div>
         ) : null}
 
         {/* The Home weather card at full size. A pushed screen, like Profile, so

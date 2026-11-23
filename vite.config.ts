@@ -123,6 +123,16 @@ export default defineConfig(({ mode }) => ({
     env: {
       VITE_WEATHER_PROVIDER: 'development',
       /*
+       * The suite runs as its own environment, not as `dev`.
+       *
+       * `dev`, `staging` and `production` each resolve to a real AgriShop project
+       * (`services/shopEnvironments.ts`), so a suite that inherited any of them
+       * would read live listings and could write into a live shop's conversation.
+       * `test` resolves to nothing, which is what keeps the empty endpoints below
+       * actually empty.
+       */
+      VITE_APP_ENV: 'test',
+      /*
        * The same rule for every other endpoint, and now it matters for all of
        * them: a developer who has filled in `.env.local` — which is the normal
        * state of a working copy — would otherwise have every screen test talking
